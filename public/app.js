@@ -110,7 +110,7 @@ function normalizeStoredState(parsed, fallback) {
     ? parsed.groups.map(normalizeGroup).filter(Boolean)
     : safeFallback.groups;
 
-  return {
+  return enforceStateCharacterUniqueness({
     nextGroupId: Number.isInteger(parsed?.nextGroupId) ? parsed.nextGroupId : groups.length + 1,
     groups,
     results: Array.isArray(parsed?.results) ? parsed.results.map(normalizeCharacter).filter(Boolean) : [],
@@ -127,7 +127,7 @@ function normalizeStoredState(parsed, fallback) {
       searchMeta: parsed?.ui?.searchMeta ?? null,
       searchLoading: false
     }
-  };
+  });
 }
 
 function normalizeGroup(group) {
@@ -187,6 +187,92 @@ function normalizeCharacter(character) {
     serverName: typeof character.serverName === "string" ? character.serverName.trim() : "",
     worldName: typeof character.worldName === "string" ? character.worldName.trim() : ""
   };
+}
+
+function getCharacterServerIdentity(character) {
+  return [character?.worldName, character?.serverName, character?.serverId]
+    .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+    .filter(Boolean)
+    .join("::") || "all";
+}
+
+function getCharacterUniqueKey(character) {
+  const normalized = normalizeCharacter(character);
+  if (!normalized) {
+    return "";
+  }
+
+  return [
+    normalized.product,
+    normalized.name.trim().toLowerCase(),
+    getCharacterServerIdentity(normalized)
+  ].join("::");
+}
+
+function getCharacterStorageKey(character) {
+  const normalized = normalizeCharacter(character);
+  if (!normalized) {
+    return "";
+  }
+
+  return getCharacterUniqueKey(normalized) || normalized.id;
+}
+
+function enforceStateCharacterUniqueness(sourceState) {
+  const seenAssignedKeys = new Set();
+
+  const groups = sourceState.groups.map((group) => ({
+    ...group,
+    parties: group.parties.map((party) => party.filter((character) => {
+      const key = getCharacterStorageKey(character);
+      if (!key || seenAssignedKeys.has(key)) {
+        return false;
+      }
+
+      seenAssignedKeys.add(key);
+      return true;
+    }))
+  }));
+
+  const stash = sourceState.stash.filter((character) => {
+    const key = getCharacterStorageKey(character);
+    if (!key || seenAssignedKeys.has(key)) {
+      return false;
+    }
+
+    seenAssignedKeys.add(key);
+    return true;
+  });
+
+  return {
+    ...sourceState,
+    groups,
+    results: sortCharactersBySetting(
+      dedupeCharactersByUniqueKey(sourceState.results),
+      sourceState.settings?.sortBy
+    ),
+    stash
+  };
+}
+
+function dedupeCharactersByUniqueKey(characters) {
+  const nextMap = new Map();
+
+  characters.forEach((character) => {
+    const normalized = normalizeCharacter(character);
+    if (!normalized) {
+      return;
+    }
+
+    const key = getCharacterStorageKey(normalized);
+    const previous = nextMap.get(key);
+    nextMap.set(key, {
+      ...previous,
+      ...normalized
+    });
+  });
+
+  return Array.from(nextMap.values());
 }
 
 function normalizePower(value) {
@@ -670,7 +756,7 @@ function renderSearchStatus() {
 }
 
 function createResultCharacterCard(character) {
-  const location = findCharacterPlacement(character.id);
+  const location = findCharacterPlacement(character);
   const card = createCharacterCard(character, {
     compact: false,
     source: {
@@ -983,7 +1069,8 @@ function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIn
     return;
   }
 
-  const placement = findCharacterPlacement(character.id);
+  const placement = findCharacterPlacement(character);
+  const stashIndex = findCharacterIndexInStash(character);
   const targetGroup = state.groups.find((group) => group.id === targetGroupId);
   const targetParty = targetGroup?.parties[targetPartyIndex];
 
@@ -1001,9 +1088,13 @@ function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIn
   }
 
   if (payload.type === "party") {
-    removeCharacterFromGroups(character.id);
+    removeCharacterFromGroups(character);
   } else if (payload.type === "stash") {
-    removeCharacterFromStash(character.id);
+    removeCharacterFromStash(character);
+  } else if (placement) {
+    removeCharacterFromGroups(character);
+  } else if (stashIndex !== -1) {
+    removeCharacterFromStash(character);
   }
 
   let safeIndex = Math.max(0, Math.min(insertIndex, targetParty.length));
@@ -1026,22 +1117,23 @@ function moveCharacterToStash(payload, insertIndex) {
     return;
   }
 
-  const existingIndex = state.stash.findIndex((item) => item.id === character.id);
+  const existingIndex = findCharacterIndexInStash(character);
+  const placement = findCharacterPlacement(character);
+  const movingFromExistingStash = existingIndex !== -1 && !placement;
   const isSameStash = payload.type === "stash" && existingIndex !== -1;
 
-  if (!isSameStash && existingIndex !== -1) {
-    showToast("이미 보관함에 있는 캐릭터입니다.", "warn");
-    return;
-  }
-
   if (payload.type === "party") {
-    removeCharacterFromGroups(character.id);
+    removeCharacterFromGroups(character);
   } else if (payload.type === "stash") {
-    removeCharacterFromStash(character.id);
+    removeCharacterFromStash(character);
+  } else if (placement) {
+    removeCharacterFromGroups(character);
+  } else if (existingIndex !== -1) {
+    removeCharacterFromStash(character);
   }
 
   let safeIndex = Math.max(0, Math.min(insertIndex, state.stash.length));
-  if (isSameStash && existingIndex < insertIndex) {
+  if ((isSameStash || movingFromExistingStash) && existingIndex < insertIndex) {
     safeIndex -= 1;
   }
 
@@ -1095,7 +1187,7 @@ function resolveCharacter(payload) {
 function removeCharacterFromGroups(characterId) {
   for (const group of state.groups) {
     for (const party of group.parties) {
-      const index = party.findIndex((character) => character.id === characterId);
+      const index = party.findIndex((character) => isSameCharacter(character, characterId));
       if (index !== -1) {
         return party.splice(index, 1)[0];
       }
@@ -1105,7 +1197,7 @@ function removeCharacterFromGroups(characterId) {
 }
 
 function removeCharacterFromStash(characterId) {
-  const index = state.stash.findIndex((character) => character.id === characterId);
+  const index = state.stash.findIndex((character) => isSameCharacter(character, characterId));
   if (index === -1) {
     return null;
   }
@@ -1164,7 +1256,10 @@ function mergeCharacters(existingCharacters, incomingCharacters, replace) {
 
   if (!replace) {
     existingCharacters.forEach((character) => {
-      nextMap.set(character.id, cloneCharacter(character));
+      const key = getCharacterStorageKey(character);
+      if (key) {
+        nextMap.set(key, cloneCharacter(character));
+      }
     });
   }
 
@@ -1174,8 +1269,9 @@ function mergeCharacters(existingCharacters, incomingCharacters, replace) {
       return;
     }
 
-    const previous = nextMap.get(normalized.id);
-    nextMap.set(normalized.id, {
+    const key = getCharacterStorageKey(normalized);
+    const previous = nextMap.get(key);
+    nextMap.set(key, {
       ...previous,
       ...normalized
     });
@@ -1190,14 +1286,15 @@ function mergeStashCharacters(existingCharacters, incomingCharacters) {
   existingCharacters.forEach((character) => {
     const normalized = normalizeCharacter(character);
     if (normalized) {
-      nextMap.set(normalized.id, normalized);
+      nextMap.set(getCharacterStorageKey(normalized), normalized);
     }
   });
 
   incomingCharacters.forEach((character) => {
     const normalized = normalizeCharacter(character);
-    if (normalized && !nextMap.has(normalized.id)) {
-      nextMap.set(normalized.id, normalized);
+    const key = getCharacterStorageKey(normalized);
+    if (normalized && !nextMap.has(key)) {
+      nextMap.set(key, normalized);
     }
   });
 
@@ -1205,12 +1302,12 @@ function mergeStashCharacters(existingCharacters, incomingCharacters) {
 }
 
 function syncAssignedCardsWithResults(results) {
-  const resultMap = new Map(results.map((character) => [character.id, character]));
+  const resultMap = new Map(results.map((character) => [getCharacterStorageKey(character), character]));
 
   state.groups.forEach((group) => {
     group.parties.forEach((party, partyIndex) => {
       group.parties[partyIndex] = party.map((character) => {
-        const synced = resultMap.get(character.id);
+        const synced = resultMap.get(getCharacterStorageKey(character));
         return synced ? { ...character, ...synced } : character;
       });
     });
@@ -1218,9 +1315,9 @@ function syncAssignedCardsWithResults(results) {
 }
 
 function syncStashedCardsWithResults(results) {
-  const resultMap = new Map(results.map((character) => [character.id, character]));
+  const resultMap = new Map(results.map((character) => [getCharacterStorageKey(character), character]));
   state.stash = state.stash.map((character) => {
-    const synced = resultMap.get(character.id);
+    const synced = resultMap.get(getCharacterStorageKey(character));
     return synced ? { ...character, ...synced } : character;
   });
 }
@@ -1230,7 +1327,7 @@ function findCharacterPlacement(characterId) {
     const group = state.groups[groupIndex];
     for (let partyIndex = 0; partyIndex < group.parties.length; partyIndex += 1) {
       const party = group.parties[partyIndex];
-      const index = party.findIndex((character) => character.id === characterId);
+      const index = party.findIndex((character) => isSameCharacter(character, characterId));
       if (index !== -1) {
         return {
           groupId: group.id,
@@ -1245,6 +1342,23 @@ function findCharacterPlacement(characterId) {
   }
 
   return null;
+}
+
+function findCharacterIndexInStash(characterId) {
+  return state.stash.findIndex((character) => isSameCharacter(character, characterId));
+}
+
+function isSameCharacter(leftCharacter, rightCharacter) {
+  const leftKey = getCharacterStorageKey(leftCharacter);
+  if (!leftKey) {
+    return false;
+  }
+
+  if (typeof rightCharacter === "string") {
+    return leftCharacter.id === rightCharacter || leftKey === rightCharacter;
+  }
+
+  return leftKey === getCharacterStorageKey(rightCharacter);
 }
 
 function flattenAssignedCharacters() {
@@ -1493,7 +1607,11 @@ function showToast(message, tone = "info") {
 }
 
 function sortResultCharacters(characters) {
-  const primaryKey = state.settings.sortBy === "itemLevel" ? "itemLevel" : "combatPower";
+  return sortCharactersBySetting(characters, state.settings.sortBy);
+}
+
+function sortCharactersBySetting(characters, sortBy) {
+  const primaryKey = sortBy === "itemLevel" ? "itemLevel" : "combatPower";
   const secondaryKey = primaryKey === "combatPower" ? "itemLevel" : "combatPower";
 
   return characters
@@ -1519,6 +1637,6 @@ function compareMetric(left, right) {
 }
 
 function getVisibleResultCharacters() {
-  const stashedIds = new Set(state.stash.map((character) => character.id));
-  return state.results.filter((character) => !stashedIds.has(character.id));
+  const stashedKeys = new Set(state.stash.map((character) => getCharacterStorageKey(character)));
+  return state.results.filter((character) => !stashedKeys.has(getCharacterStorageKey(character)));
 }
