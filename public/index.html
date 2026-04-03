@@ -60,6 +60,14 @@
             />
           </label>
 
+          <label class="field">
+            <span>정렬</span>
+            <select id="sortSelect" name="sortBy">
+              <option value="combatPower">전투력 순</option>
+              <option value="itemLevel">아이템 레벨 순</option>
+            </select>
+          </label>
+
           <label class="field field-wide">
             <span>캐릭터명</span>
             <input
@@ -76,6 +84,10 @@
             검색
           </button>
         </form>
+
+        <p class="search-hint" id="searchHint">
+          아이템 레벨이 1000 이하인 캐릭터는 검색 결과에 표시되지 않습니다.
+        </p>
 
         <div class="search-status-row">
           <p class="search-status" id="searchStatus">AION2 서버와 캐릭터명을 입력한 뒤 검색하세요.</p>

@@ -5,8 +5,10 @@ const AION2_SEARCH_PATH = "/ko-kr/api/search/aion2/search/v2/character";
 const AION2_SERVERS_PATH = "/api/gameinfo/servers";
 const AION2_PCDATA_PATH = "/api/gameinfo/pcdata";
 const AION2_CHARACTER_INFO_PATH = "/api/character/info";
+const AION2_CLASS_ICON_BASE_URL = "https://assets.playnccdn.com/static-aion2/characters/img/class";
 const SUPPORTED_PRODUCTS = new Set(["aion2"]);
 const CACHE_TTL_MS = 1000 * 60 * 60;
+const MIN_VISIBLE_ITEM_LEVEL = 1000;
 
 const cache = {
   pcDataMap: {
@@ -31,6 +33,7 @@ exports.handler = async function handler(event) {
   const product = (params.get("product") || "aion2").trim().toLowerCase();
   const keyword = (params.get("keyword") || "").trim();
   const server = (params.get("server") || "").trim();
+  const sortBy = (params.get("sortBy") || "combatPower").trim();
 
   if (action !== "search") {
     return jsonResponse(400, { error: "지원하지 않는 action 입니다." }, headers);
@@ -51,7 +54,7 @@ exports.handler = async function handler(event) {
   }
 
   try {
-    const result = await searchAion2Characters({ keyword, server });
+    const result = await searchAion2Characters({ keyword, server, sortBy });
     return jsonResponse(200, result, headers);
   } catch (error) {
     return jsonResponse(
@@ -65,11 +68,12 @@ exports.handler = async function handler(event) {
   }
 };
 
-async function searchAion2Characters({ keyword, server }) {
+async function searchAion2Characters({ keyword, server, sortBy }) {
   const [servers, pcDataMap] = await Promise.all([
     getCachedServers(),
     getCachedPcDataMap()
   ]);
+  const resolvedSortBy = resolveSortBy(sortBy);
 
   const resolvedServer = resolveServer(server, servers);
   const payload = await requestAion2Json({
@@ -97,20 +101,27 @@ async function searchAion2Characters({ keyword, server }) {
   );
 
   const characterInfoCache = new Map();
-  const characters = await Promise.all(
+  const enrichedCharacters = await Promise.all(
     sortedCharacters.map((character) => enrichCharacterWithInfo(character, characterInfoCache))
   );
+  const filteredCharacters = enrichedCharacters.filter((character) => {
+    return toNumberValue(character.itemLevel) > MIN_VISIBLE_ITEM_LEVEL;
+  });
+  const characters = sortDisplayCharacters(filteredCharacters, resolvedSortBy, keyword, resolvedServer?.serverId || "");
 
   return {
     characters: characters.map(stripInternalFields),
     meta: {
       count: characters.length,
-      enrichedCount: characters.filter(
+      enrichedCount: enrichedCharacters.filter(
         (character) => character.combatPower !== null || character.itemLevel !== null
       ).length,
+      filteredOutCount: enrichedCharacters.length - filteredCharacters.length,
       product: "aion2",
       infoPath: AION2_CHARACTER_INFO_PATH,
+      minimumItemLevel: MIN_VISIBLE_ITEM_LEVEL + 1,
       searchPath: AION2_SEARCH_PATH,
+      sortBy: resolvedSortBy,
       server: resolvedServer
         ? {
             serverId: resolvedServer.serverId,
@@ -163,6 +174,7 @@ function normalizeAion2Character(source, pcDataMap) {
 
   return {
     characterId,
+    classIconUrl: buildClassIconUrl(classInfo?.classKey),
     className: classInfo?.className || "미확인",
     combatPower: null,
     id: keyParts.filter(Boolean).join(":"),
@@ -177,6 +189,7 @@ function normalizeAion2Character(source, pcDataMap) {
 
 function stripInternalFields(character) {
   return {
+    classIconUrl: character.classIconUrl,
     className: character.className,
     combatPower: character.combatPower,
     id: character.id,
@@ -206,6 +219,35 @@ function sortCharacters(characters, keyword, serverId) {
     });
 }
 
+function sortDisplayCharacters(characters, sortBy, keyword, serverId) {
+  const primaryKey = sortBy === "itemLevel" ? "itemLevel" : "combatPower";
+  const secondaryKey = primaryKey === "combatPower" ? "itemLevel" : "combatPower";
+  const normalizedKeyword = normalizeToken(keyword);
+
+  return characters.slice().sort((left, right) => {
+    const primaryDiff = compareMetric(right[primaryKey], left[primaryKey]);
+    if (primaryDiff !== 0) {
+      return primaryDiff;
+    }
+
+    const secondaryDiff = compareMetric(right[secondaryKey], left[secondaryKey]);
+    if (secondaryDiff !== 0) {
+      return secondaryDiff;
+    }
+
+    const scoreDiff = getMatchScore(right, normalizedKeyword, serverId) - getMatchScore(left, normalizedKeyword, serverId);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+
+    return left.name.localeCompare(right.name, "ko");
+  });
+}
+
+function compareMetric(left, right) {
+  return toNumberValue(left) - toNumberValue(right);
+}
+
 function getMatchScore(character, normalizedKeyword, serverId) {
   const normalizedName = normalizeToken(character.name);
   let score = 0;
@@ -223,6 +265,10 @@ function getMatchScore(character, normalizedKeyword, serverId) {
   }
 
   return score;
+}
+
+function resolveSortBy(sortBy) {
+  return sortBy === "itemLevel" ? "itemLevel" : "combatPower";
 }
 
 function dedupeCharacters(characters) {
@@ -428,6 +474,11 @@ function cleanObject(input) {
 
 function normalizeToken(value) {
   return toStringValue(value).replace(/\s+/g, "").toLowerCase();
+}
+
+function buildClassIconUrl(classKey) {
+  const key = normalizeToken(classKey);
+  return key ? `${AION2_CLASS_ICON_BASE_URL}/class_icon_${key}.png` : "";
 }
 
 function safeDecodeURIComponent(value) {

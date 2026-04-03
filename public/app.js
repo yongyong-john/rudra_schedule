@@ -16,8 +16,10 @@ const elements = {
   resultsReleaseZone: document.getElementById("resultsReleaseZone"),
   searchButton: document.getElementById("searchButton"),
   searchForm: document.getElementById("searchForm"),
+  searchHint: document.getElementById("searchHint"),
   searchStatus: document.getElementById("searchStatus"),
   serverInput: document.getElementById("serverInput"),
+  sortSelect: document.getElementById("sortSelect"),
   toast: document.getElementById("toast")
 };
 
@@ -36,7 +38,8 @@ function hydrateState() {
     settings: {
       keyword: "",
       product: "aion2",
-      server: ""
+      server: "",
+      sortBy: "combatPower"
     },
     ui: {
       searchMeta: null,
@@ -64,7 +67,8 @@ function hydrateState() {
         product: PRODUCT_OPTIONS.some((option) => option.value === parsed.settings?.product)
           ? parsed.settings.product
           : "aion2",
-        server: typeof parsed.settings?.server === "string" ? parsed.settings.server : ""
+        server: typeof parsed.settings?.server === "string" ? parsed.settings.server : "",
+        sortBy: parsed.settings?.sortBy === "itemLevel" ? "itemLevel" : "combatPower"
       },
       ui: {
         searchMeta: parsed.ui?.searchMeta ?? null,
@@ -126,6 +130,7 @@ function normalizeCharacter(character) {
     className: typeof character.className === "string" && character.className.trim()
       ? character.className.trim()
       : "미확인",
+    classIconUrl: typeof character.classIconUrl === "string" ? character.classIconUrl.trim() : "",
     combatPower: normalizePower(character.combatPower),
     itemLevel: normalizePower(character.itemLevel),
     serverId: typeof character.serverId === "string" ? character.serverId.trim() : "",
@@ -154,6 +159,7 @@ function syncForm() {
   elements.keywordInput.value = state.settings.keyword;
   elements.productSelect.value = state.settings.product;
   elements.serverInput.value = state.settings.server;
+  elements.sortSelect.value = state.settings.sortBy;
 }
 
 function bindEvents() {
@@ -174,10 +180,18 @@ function bindEvents() {
   });
 
   elements.searchForm.addEventListener("submit", handleSearchSubmit);
+  elements.sortSelect.addEventListener("change", handleSortChange);
 
   elements.resultsReleaseZone.addEventListener("dragover", handleDragOver);
   elements.resultsReleaseZone.addEventListener("dragleave", handleDragLeave);
   elements.resultsReleaseZone.addEventListener("drop", handleDropToReleaseZone);
+}
+
+function handleSortChange(event) {
+  state.settings.sortBy = event.target.value === "itemLevel" ? "itemLevel" : "combatPower";
+  state.results = sortResultCharacters(state.results);
+  persistState();
+  render();
 }
 
 async function handleSearchSubmit(event) {
@@ -186,6 +200,7 @@ async function handleSearchSubmit(event) {
   const keyword = elements.keywordInput.value.trim();
   const product = elements.productSelect.value;
   const server = elements.serverInput.value.trim();
+  const sortBy = elements.sortSelect.value === "itemLevel" ? "itemLevel" : "combatPower";
 
   if (!keyword) {
     showToast("캐릭터명을 입력해 주세요.", "warn");
@@ -196,6 +211,7 @@ async function handleSearchSubmit(event) {
   state.settings.keyword = keyword;
   state.settings.product = product;
   state.settings.server = server;
+  state.settings.sortBy = sortBy;
   state.ui.searchLoading = true;
   state.ui.searchMeta = null;
   render();
@@ -203,7 +219,8 @@ async function handleSearchSubmit(event) {
   const params = new URLSearchParams({
     action: "search",
     keyword,
-    product
+    product,
+    sortBy
   });
 
   if (server) {
@@ -287,6 +304,13 @@ function renderGroups() {
       actions.appendChild(removeButton);
     }
 
+    const clearButton = document.createElement("button");
+    clearButton.type = "button";
+    clearButton.className = "btn btn-ghost";
+    clearButton.textContent = "그룹 초기화";
+    clearButton.addEventListener("click", () => clearGroup(group.id));
+    actions.appendChild(clearButton);
+
     groupHead.append(titleWrap, actions);
 
     const grid = document.createElement("div");
@@ -341,7 +365,7 @@ function renderResults() {
     emptyState.innerHTML = `
       <div>
         아직 불러온 캐릭터가 없습니다.<br />
-        하단 검색으로 AION2 캐릭터를 먼저 가져오세요.
+        상단 검색으로 AION2 캐릭터를 먼저 가져오세요.
       </div>
     `;
     elements.resultsList.appendChild(emptyState);
@@ -354,14 +378,25 @@ function renderResults() {
 }
 
 function renderSearchStatus() {
+  if (elements.searchHint) {
+    const filteredCount = Number(state.ui.searchMeta?.filteredOutCount || 0);
+    elements.searchHint.textContent = filteredCount > 0
+      ? `아이템 레벨이 1000 이하인 캐릭터 ${filteredCount}명은 검색 결과에서 제외되었습니다.`
+      : "아이템 레벨이 1000 이하인 캐릭터는 검색 결과에 표시되지 않습니다.";
+  }
+
   if (state.ui.searchLoading) {
     elements.searchStatus.textContent = "AION2 공식 검색/캐릭터 정보 API에서 캐릭터를 조회하는 중입니다.";
     return;
   }
 
   if (state.ui.searchMeta?.searchPath) {
+    const sortLabel = state.settings.sortBy === "itemLevel" ? "아이템 레벨 순" : "전투력 순";
+    const filteredLabel = Number(state.ui.searchMeta?.filteredOutCount || 0) > 0
+      ? ` · ${state.ui.searchMeta.filteredOutCount}명 제외`
+      : "";
     elements.searchStatus.textContent =
-      `마지막 조회: 검색 API ${state.ui.searchMeta.searchPath} · 상세 API ${state.ui.searchMeta.infoPath || "없음"}`;
+      `마지막 조회: ${sortLabel} · 아이템 레벨 1000 이하 제외${filteredLabel} · 검색 API ${state.ui.searchMeta.searchPath}`;
     return;
   }
 
@@ -407,6 +442,7 @@ function createPartyCharacterCard(character, groupId, partyIndex, index) {
 
   const card = createCharacterCard(character, {
     compact: true,
+    onRemove: () => removeCharacterFromParty(character.id),
     source: {
       type: "party",
       characterId: character.id,
@@ -475,6 +511,7 @@ function createCharacterCard(character, options) {
   top.className = "character-top";
 
   const titleWrap = document.createElement("div");
+  titleWrap.className = "character-title-wrap";
   const name = document.createElement("p");
   name.className = "character-name";
   name.textContent = character.name;
@@ -486,18 +523,44 @@ function createCharacterCard(character, options) {
 
   titleWrap.append(name, sub);
 
-  const game = document.createElement("span");
-  game.className = "character-game";
-  game.textContent = getProductLabel(character.product);
+  const actions = document.createElement("div");
+  actions.className = "character-actions";
 
-  top.append(titleWrap, game);
+  if (typeof options.onRemove === "function") {
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "card-remove-btn";
+    removeButton.draggable = false;
+    removeButton.textContent = "제거";
+    removeButton.addEventListener("mousedown", (event) => event.stopPropagation());
+    removeButton.addEventListener("dragstart", (event) => event.preventDefault());
+    removeButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      options.onRemove();
+    });
+    actions.appendChild(removeButton);
+  }
+
+  top.append(titleWrap, actions);
 
   const meta = document.createElement("div");
   meta.className = "character-meta";
 
   const className = document.createElement("div");
   className.className = "character-class";
-  className.textContent = character.className || "미확인";
+  if (character.classIconUrl) {
+    const icon = document.createElement("img");
+    icon.className = "class-icon";
+    icon.src = character.classIconUrl;
+    icon.alt = `${character.className || "직업"} 아이콘`;
+    icon.loading = "lazy";
+    className.appendChild(icon);
+  }
+
+  const classLabel = document.createElement("span");
+  classLabel.textContent = character.className || "미확인";
+  className.appendChild(classLabel);
 
   const metrics = document.createElement("div");
   metrics.className = "metric-grid";
@@ -520,6 +583,29 @@ function createMetricBlock(label, value) {
     <strong class="metric-value">${value}</strong>
   `;
   return block;
+}
+
+function clearGroup(groupId) {
+  const group = state.groups.find((item) => item.id === groupId);
+  if (!group) {
+    return;
+  }
+
+  const releasedCharacters = flattenGroupCharacters(group);
+  if (!releasedCharacters.length) {
+    showToast("이미 비어 있는 그룹입니다.", "warn");
+    return;
+  }
+
+  if (!window.confirm("이 그룹의 배치 인원을 모두 해제할까요?")) {
+    return;
+  }
+
+  group.parties = [[], []];
+  state.results = mergeCharacters(state.results, releasedCharacters, false);
+  persistState();
+  render();
+  showToast("그룹 인원을 모두 해제했습니다.");
 }
 
 function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIndex) {
@@ -631,6 +717,18 @@ function removeGroup(groupId) {
   showToast("그룹을 삭제했습니다.");
 }
 
+function removeCharacterFromParty(characterId) {
+  const character = removeCharacterFromGroups(characterId);
+  if (!character) {
+    return;
+  }
+
+  state.results = mergeCharacters(state.results, [character], false);
+  persistState();
+  render();
+  showToast(`${character.name}을 검색 결과로 되돌렸습니다.`);
+}
+
 function mergeCharacters(existingCharacters, incomingCharacters, replace) {
   const nextMap = new Map();
 
@@ -653,7 +751,7 @@ function mergeCharacters(existingCharacters, incomingCharacters, replace) {
     });
   });
 
-  return Array.from(nextMap.values()).sort((left, right) => left.name.localeCompare(right.name, "ko"));
+  return sortResultCharacters(Array.from(nextMap.values()));
 }
 
 function syncAssignedCardsWithResults(results) {
@@ -726,10 +824,6 @@ function formatPower(value) {
   return new Intl.NumberFormat("ko-KR").format(Math.round(value));
 }
 
-function getProductLabel(product) {
-  return PRODUCT_OPTIONS.find((option) => option.value === product)?.label ?? product.toUpperCase();
-}
-
 function readDragPayload(event) {
   event.preventDefault();
   try {
@@ -758,4 +852,30 @@ function showToast(message, tone = "info") {
   toastTimer = window.setTimeout(() => {
     elements.toast.classList.remove("is-visible");
   }, 2200);
+}
+
+function sortResultCharacters(characters) {
+  const primaryKey = state.settings.sortBy === "itemLevel" ? "itemLevel" : "combatPower";
+  const secondaryKey = primaryKey === "combatPower" ? "itemLevel" : "combatPower";
+
+  return characters
+    .filter((character) => (character.itemLevel ?? 0) > 1000)
+    .slice()
+    .sort((left, right) => {
+      const primaryDiff = compareMetric(right[primaryKey], left[primaryKey]);
+      if (primaryDiff !== 0) {
+        return primaryDiff;
+      }
+
+      const secondaryDiff = compareMetric(right[secondaryKey], left[secondaryKey]);
+      if (secondaryDiff !== 0) {
+        return secondaryDiff;
+      }
+
+      return left.name.localeCompare(right.name, "ko");
+    });
+}
+
+function compareMetric(left, right) {
+  return (left ?? 0) - (right ?? 0);
 }
