@@ -692,12 +692,9 @@ function renderResults() {
   if (!visibleResults.length) {
     const emptyState = document.createElement("div");
     emptyState.className = "empty-state";
-    const emptyMessage = state.results.length && state.stash.length
-      ? "현재 검색 결과는 모두 보관함으로 이동했습니다."
-      : "아직 불러온 캐릭터가 없습니다.";
     emptyState.innerHTML = `
       <div>
-        ${emptyMessage}<br />
+        아직 불러온 캐릭터가 없습니다.<br />
         상단 검색으로 AION2 캐릭터를 먼저 가져오세요.
       </div>
     `;
@@ -757,8 +754,11 @@ function renderSearchStatus() {
 
 function createResultCharacterCard(character) {
   const location = findCharacterPlacement(character);
+  const stashIndex = findCharacterIndexInStash(character);
+  const isLocked = Boolean(location) || stashIndex !== -1;
   const card = createCharacterCard(character, {
     compact: false,
+    draggable: !isLocked,
     source: {
       type: "results",
       characterId: character.id
@@ -769,6 +769,15 @@ function createResultCharacterCard(character) {
     const chip = document.createElement("div");
     chip.className = "assignment-chip";
     chip.textContent = `${location.groupNumber}그룹 ${location.partyNumber}파티 배치됨`;
+    card.appendChild(chip);
+    card.classList.add("is-assigned");
+    return card;
+  }
+
+  if (stashIndex !== -1) {
+    const chip = document.createElement("div");
+    chip.className = "assignment-chip";
+    chip.textContent = "캐릭터 보관함에 배치됨";
     card.appendChild(chip);
     card.classList.add("is-assigned");
   }
@@ -918,12 +927,16 @@ function createStashDropZone(insertIndex, isEmpty) {
 function createCharacterCard(character, options) {
   const card = document.createElement("article");
   card.className = `character-card${options.compact ? " is-compact" : ""}`;
-  card.draggable = true;
+  card.draggable = options.draggable !== false;
 
-  card.addEventListener("dragstart", (event) => {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", JSON.stringify(options.source));
-  });
+  if (card.draggable) {
+    card.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", JSON.stringify(options.source));
+    });
+  } else {
+    card.classList.add("is-locked");
+  }
 
   const layout = document.createElement("div");
   layout.className = "character-layout";
@@ -1637,6 +1650,5 @@ function compareMetric(left, right) {
 }
 
 function getVisibleResultCharacters() {
-  const stashedKeys = new Set(state.stash.map((character) => getCharacterStorageKey(character)));
-  return state.results.filter((character) => !stashedKeys.has(getCharacterStorageKey(character)));
+  return state.results;
 }

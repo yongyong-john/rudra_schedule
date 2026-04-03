@@ -462,6 +462,11 @@ select {
   border-color: rgba(31, 122, 92, 0.18);
 }
 
+.character-card.is-locked,
+.character-card.is-locked:active {
+  cursor: default;
+}
+
 .character-card.is-compact {
   padding: 9px;
 }
