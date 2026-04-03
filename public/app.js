@@ -19,6 +19,8 @@ const elements = {
   searchHint: document.getElementById("searchHint"),
   searchStatus: document.getElementById("searchStatus"),
   serverInput: document.getElementById("serverInput"),
+  stashContainer: document.getElementById("stashContainer"),
+  stashCount: document.getElementById("stashCount"),
   sortSelect: document.getElementById("sortSelect"),
   toast: document.getElementById("toast")
 };
@@ -35,6 +37,7 @@ function hydrateState() {
     nextGroupId: 2,
     groups: [createGroup(1)],
     results: [],
+    stash: [],
     settings: {
       keyword: "",
       product: "aion2",
@@ -62,6 +65,7 @@ function hydrateState() {
       nextGroupId: Number.isInteger(parsed.nextGroupId) ? parsed.nextGroupId : groups.length + 1,
       groups,
       results: Array.isArray(parsed.results) ? parsed.results.map(normalizeCharacter).filter(Boolean) : [],
+      stash: Array.isArray(parsed.stash) ? parsed.stash.map(normalizeCharacter).filter(Boolean) : [],
       settings: {
         keyword: typeof parsed.settings?.keyword === "string" ? parsed.settings.keyword : "",
         product: PRODUCT_OPTIONS.some((option) => option.value === parsed.settings?.product)
@@ -241,6 +245,7 @@ async function handleSearchSubmit(event) {
 
     state.results = mergeCharacters(state.results, characters, true);
     syncAssignedCardsWithResults(characters);
+    syncStashedCardsWithResults(characters);
     state.ui.searchMeta = payload.meta ?? null;
     state.ui.searchLoading = false;
     persistState();
@@ -260,6 +265,7 @@ async function handleSearchSubmit(event) {
 function render() {
   renderSummary();
   renderGroups();
+  renderStash();
   renderResults();
   renderSearchStatus();
   syncForm();
@@ -268,8 +274,10 @@ function render() {
 function renderSummary() {
   const assignedCount = flattenAssignedCharacters().length;
   const capacity = state.groups.length * 8;
+  const visibleResults = getVisibleResultCharacters();
   elements.assignmentSummary.textContent = `${assignedCount} / ${capacity} 배치`;
-  elements.resultsCount.textContent = `검색 결과 ${state.results.length}명`;
+  elements.resultsCount.textContent = `검색 결과 ${visibleResults.length}명`;
+  elements.stashCount.textContent = `보관 ${state.stash.length}명`;
   elements.searchButton.disabled = state.ui.searchLoading;
   elements.searchButton.textContent = state.ui.searchLoading ? "검색 중..." : "검색";
 }
@@ -358,13 +366,17 @@ function renderGroups() {
 
 function renderResults() {
   elements.resultsList.innerHTML = "";
+  const visibleResults = getVisibleResultCharacters();
 
-  if (!state.results.length) {
+  if (!visibleResults.length) {
     const emptyState = document.createElement("div");
     emptyState.className = "empty-state";
+    const emptyMessage = state.results.length && state.stash.length
+      ? "현재 검색 결과는 모두 보관함으로 이동했습니다."
+      : "아직 불러온 캐릭터가 없습니다.";
     emptyState.innerHTML = `
       <div>
-        아직 불러온 캐릭터가 없습니다.<br />
+        ${emptyMessage}<br />
         상단 검색으로 AION2 캐릭터를 먼저 가져오세요.
       </div>
     `;
@@ -372,9 +384,28 @@ function renderResults() {
     return;
   }
 
-  state.results.forEach((character) => {
+  visibleResults.forEach((character) => {
     elements.resultsList.appendChild(createResultCharacterCard(character));
   });
+}
+
+function renderStash() {
+  elements.stashContainer.innerHTML = "";
+
+  if (!state.stash.length) {
+    elements.stashContainer.appendChild(createStashDropZone(0, true));
+    return;
+  }
+
+  const stashList = document.createElement("div");
+  stashList.className = "stash-list";
+
+  state.stash.forEach((character, index) => {
+    stashList.appendChild(createStashCharacterCard(character, index));
+  });
+  stashList.appendChild(createStashDropZone(state.stash.length, false));
+
+  elements.stashContainer.appendChild(stashList);
 }
 
 function renderSearchStatus() {
@@ -456,6 +487,35 @@ function createPartyCharacterCard(character, groupId, partyIndex, index) {
   return wrapper;
 }
 
+function createStashCharacterCard(character, index) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "stash-drop-target";
+
+  wrapper.addEventListener("dragover", handleDragOver);
+  wrapper.addEventListener("dragleave", handleDragLeave);
+  wrapper.addEventListener("drop", (event) => {
+    handleDragLeave(event);
+    const payload = readDragPayload(event);
+    if (!payload) {
+      return;
+    }
+
+    moveCharacterToStash(payload, index);
+  });
+
+  const card = createCharacterCard(character, {
+    compact: false,
+    source: {
+      type: "stash",
+      characterId: character.id,
+      index
+    }
+  });
+
+  wrapper.appendChild(card);
+  return wrapper;
+}
+
 function createEndDropZone(groupId, partyIndex, insertIndex) {
   const zone = document.createElement("div");
   zone.className = "drop-target drop-target-end";
@@ -497,6 +557,33 @@ function createEmptyDropZone(groupId, partyIndex) {
   return zone;
 }
 
+function createStashDropZone(insertIndex, isEmpty) {
+  const zone = document.createElement("div");
+  zone.className = `stash-drop-target stash-drop-zone${isEmpty ? " is-empty" : ""}`;
+  zone.innerHTML = isEmpty
+    ? `
+      <div class="drop-copy">
+        검색 결과나 파티 카드를<br />
+        여기로 드래그해 임시 보관하세요.
+      </div>
+    `
+    : "여기로 드롭해 보관함 끝에 추가";
+
+  zone.addEventListener("dragover", handleDragOver);
+  zone.addEventListener("dragleave", handleDragLeave);
+  zone.addEventListener("drop", (event) => {
+    handleDragLeave(event);
+    const payload = readDragPayload(event);
+    if (!payload) {
+      return;
+    }
+
+    moveCharacterToStash(payload, insertIndex);
+  });
+
+  return zone;
+}
+
 function createCharacterCard(character, options) {
   const card = document.createElement("article");
   card.className = `character-card${options.compact ? " is-compact" : ""}`;
@@ -506,6 +593,12 @@ function createCharacterCard(character, options) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", JSON.stringify(options.source));
   });
+
+  const layout = document.createElement("div");
+  layout.className = "character-layout";
+
+  const main = document.createElement("div");
+  main.className = "character-main";
 
   const top = document.createElement("div");
   top.className = "character-top";
@@ -522,27 +615,7 @@ function createCharacterCard(character, options) {
   sub.textContent = serverLabel || "서버 정보 없음";
 
   titleWrap.append(name, sub);
-
-  const actions = document.createElement("div");
-  actions.className = "character-actions";
-
-  if (typeof options.onRemove === "function") {
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "card-remove-btn";
-    removeButton.draggable = false;
-    removeButton.textContent = "제거";
-    removeButton.addEventListener("mousedown", (event) => event.stopPropagation());
-    removeButton.addEventListener("dragstart", (event) => event.preventDefault());
-    removeButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      options.onRemove();
-    });
-    actions.appendChild(removeButton);
-  }
-
-  top.append(titleWrap, actions);
+  top.appendChild(titleWrap);
 
   const meta = document.createElement("div");
   meta.className = "character-meta";
@@ -562,6 +635,32 @@ function createCharacterCard(character, options) {
   classLabel.textContent = character.className || "미확인";
   className.appendChild(classLabel);
 
+  meta.appendChild(className);
+  main.append(top, meta);
+
+  const side = document.createElement("div");
+  side.className = "character-side";
+
+  const actions = document.createElement("div");
+  actions.className = "character-actions";
+
+  if (typeof options.onRemove === "function") {
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "card-remove-btn";
+    removeButton.draggable = false;
+    removeButton.textContent = "제거";
+    removeButton.addEventListener("mousedown", (event) => event.stopPropagation());
+    removeButton.addEventListener("dragstart", (event) => event.preventDefault());
+    removeButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      options.onRemove();
+    });
+    actions.appendChild(removeButton);
+    side.appendChild(actions);
+  }
+
   const metrics = document.createElement("div");
   metrics.className = "metric-grid";
   metrics.append(
@@ -569,9 +668,9 @@ function createCharacterCard(character, options) {
     createMetricBlock("아이템 레벨", formatPower(character.itemLevel))
   );
 
-  meta.append(className, metrics);
-
-  card.append(top, meta);
+  side.appendChild(metrics);
+  layout.append(main, side);
+  card.append(layout);
   return card;
 }
 
@@ -632,7 +731,11 @@ function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIn
     return;
   }
 
-  removeCharacterFromGroups(character.id);
+  if (payload.type === "party") {
+    removeCharacterFromGroups(character.id);
+  } else if (payload.type === "stash") {
+    removeCharacterFromStash(character.id);
+  }
 
   let safeIndex = Math.max(0, Math.min(insertIndex, targetParty.length));
   if (sameParty && placement.index < insertIndex) {
@@ -647,14 +750,48 @@ function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIn
   showToast(`${character.name}을 ${groupNumber}그룹 ${targetPartyIndex + 1}파티로 이동했습니다.`);
 }
 
-function handleDropToReleaseZone(event) {
-  handleDragLeave(event);
-  const payload = readDragPayload(event);
-  if (!payload || payload.type !== "party") {
+function moveCharacterToStash(payload, insertIndex) {
+  const character = resolveCharacter(payload);
+  if (!character) {
+    showToast("보관할 캐릭터 정보를 찾지 못했습니다.", "error");
     return;
   }
 
-  const character = removeCharacterFromGroups(payload.characterId);
+  const existingIndex = state.stash.findIndex((item) => item.id === character.id);
+  const isSameStash = payload.type === "stash" && existingIndex !== -1;
+
+  if (!isSameStash && existingIndex !== -1) {
+    showToast("이미 보관함에 있는 캐릭터입니다.", "warn");
+    return;
+  }
+
+  if (payload.type === "party") {
+    removeCharacterFromGroups(character.id);
+  } else if (payload.type === "stash") {
+    removeCharacterFromStash(character.id);
+  }
+
+  let safeIndex = Math.max(0, Math.min(insertIndex, state.stash.length));
+  if (isSameStash && existingIndex < insertIndex) {
+    safeIndex -= 1;
+  }
+
+  state.stash.splice(safeIndex, 0, character);
+  persistState();
+  render();
+  showToast(`${character.name}을 보관함에 추가했습니다.`);
+}
+
+function handleDropToReleaseZone(event) {
+  handleDragLeave(event);
+  const payload = readDragPayload(event);
+  if (!payload || !["party", "stash"].includes(payload.type)) {
+    return;
+  }
+
+  const character = payload.type === "party"
+    ? removeCharacterFromGroups(payload.characterId)
+    : removeCharacterFromStash(payload.characterId);
   if (!character) {
     return;
   }
@@ -668,6 +805,10 @@ function handleDropToReleaseZone(event) {
 function resolveCharacter(payload) {
   if (payload.type === "results") {
     return cloneCharacter(state.results.find((character) => character.id === payload.characterId));
+  }
+
+  if (payload.type === "stash") {
+    return cloneCharacter(state.stash.find((character) => character.id === payload.characterId));
   }
 
   if (payload.type === "party") {
@@ -692,6 +833,15 @@ function removeCharacterFromGroups(characterId) {
     }
   }
   return null;
+}
+
+function removeCharacterFromStash(characterId) {
+  const index = state.stash.findIndex((character) => character.id === characterId);
+  if (index === -1) {
+    return null;
+  }
+
+  return state.stash.splice(index, 1)[0];
 }
 
 function removeGroup(groupId) {
@@ -767,6 +917,14 @@ function syncAssignedCardsWithResults(results) {
   });
 }
 
+function syncStashedCardsWithResults(results) {
+  const resultMap = new Map(results.map((character) => [character.id, character]));
+  state.stash = state.stash.map((character) => {
+    const synced = resultMap.get(character.id);
+    return synced ? { ...character, ...synced } : character;
+  });
+}
+
 function findCharacterPlacement(characterId) {
   for (let groupIndex = 0; groupIndex < state.groups.length; groupIndex += 1) {
     const group = state.groups[groupIndex];
@@ -808,6 +966,7 @@ function persistState() {
       nextGroupId: state.nextGroupId,
       groups: state.groups,
       results: state.results,
+      stash: state.stash,
       settings: state.settings,
       ui: {
         searchMeta: state.ui.searchMeta
@@ -878,4 +1037,9 @@ function sortResultCharacters(characters) {
 
 function compareMetric(left, right) {
   return (left ?? 0) - (right ?? 0);
+}
+
+function getVisibleResultCharacters() {
+  const stashedIds = new Set(state.stash.map((character) => character.id));
+  return state.results.filter((character) => !stashedIds.has(character.id));
 }
