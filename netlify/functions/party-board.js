@@ -10,6 +10,11 @@ const BOARD_STORE_NAME = "aion2-party-boards";
 const MAX_CREATE_ATTEMPTS = 24;
 const SUPPORTED_PRODUCTS = new Set(["aion2"]);
 const BOARD_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+const EMPTY_BOARD_TTL_MS = 60 * 60 * 1000;
+const INACTIVE_BOARD_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const ACTIVITY_TOUCH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const CLEANUP_RUN_INTERVAL_MS = 30 * 60 * 1000;
+const CLEANUP_META_KEY = "_meta/cleanup";
 const LOCAL_STORE_PATH = path.join(process.cwd(), ".data", "party-board-store.json");
 
 exports.handler = async function handler(event) {
@@ -59,24 +64,20 @@ exports.handler = async function handler(event) {
 };
 
 async function createBoard(inputState) {
+  await maybeCleanupExpiredBoards();
   const state = sanitizeBoardState(inputState);
 
   for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
     const boardCode = generateBoardCode();
     const now = new Date().toISOString();
-    const entry = {
-      boardCode,
-      createdAt: now,
-      updatedAt: now,
-      state
-    };
+    const entry = createBoardEntry(boardCode, state, now);
 
     const result = await storeSetJson(boardCode, entry, {
       onlyIfNew: true
     });
 
     if (result?.modified) {
-      return entry;
+      return toPublicBoardPayload(entry);
     }
   }
 
@@ -84,34 +85,182 @@ async function createBoard(inputState) {
 }
 
 async function loadBoard(boardCode) {
-  const entry = await storeGetJson(boardCode);
+  const entry = await getBoardEntry(boardCode, { touchActivity: true });
+  return toPublicBoardPayload(entry);
+}
+
+async function saveBoard(boardCode, inputState) {
+  await maybeCleanupExpiredBoards();
+  const existing = await getBoardEntry(boardCode, { touchActivity: false });
+  const nextState = sanitizeBoardState(inputState);
+  const updatedAt = new Date().toISOString();
+  const existingIsEmpty = isBoardStateEmpty(existing.state);
+  const nextIsEmpty = isBoardStateEmpty(nextState);
+
+  const entry = {
+    boardCode,
+    createdAt: existing.createdAt || updatedAt,
+    updatedAt,
+    lastActivityAt: updatedAt,
+    emptySinceAt: nextIsEmpty
+      ? (existingIsEmpty ? existing.emptySinceAt || updatedAt : updatedAt)
+      : "",
+    state: nextState
+  };
+
+  await storeSetJson(boardCode, entry);
+
+  return toPublicBoardPayload(entry);
+}
+
+async function getBoardEntry(boardCode, options = {}) {
+  const rawEntry = await storeGetJson(boardCode);
+  const entry = normalizeBoardEntry(boardCode, rawEntry);
 
   if (!entry) {
     throw createError(404, "해당 서버 보드를 찾지 못했습니다.");
   }
 
+  const expiration = getBoardExpiration(entry);
+  if (expiration.expired) {
+    await storeDelete(boardCode);
+    throw createError(404, expiration.message);
+  }
+
+  if (options.touchActivity !== false && shouldTouchBoardActivity(entry)) {
+    const now = new Date().toISOString();
+    entry.lastActivityAt = now;
+    await storeSetJson(boardCode, entry);
+  }
+
+  return entry;
+}
+
+function createBoardEntry(boardCode, state, now) {
   return {
     boardCode,
+    createdAt: now,
+    updatedAt: now,
+    lastActivityAt: now,
+    emptySinceAt: isBoardStateEmpty(state) ? now : "",
+    state
+  };
+}
+
+function toPublicBoardPayload(entry) {
+  return {
+    boardCode: entry.boardCode,
     createdAt: toStringValue(entry.createdAt) || null,
     updatedAt: toStringValue(entry.updatedAt) || null,
     state: sanitizeBoardState(entry.state)
   };
 }
 
-async function saveBoard(boardCode, inputState) {
-  const existing = await loadBoard(boardCode);
-  const updatedAt = new Date().toISOString();
+function normalizeBoardEntry(boardCode, entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
 
-  const entry = {
+  const state = sanitizeBoardState(entry.state);
+  const createdAt = toStringValue(entry.createdAt) || toStringValue(entry.updatedAt);
+  const updatedAt = toStringValue(entry.updatedAt) || createdAt;
+  const lastActivityAt = toStringValue(entry.lastActivityAt) || updatedAt || createdAt;
+  const isEmpty = isBoardStateEmpty(state);
+
+  return {
     boardCode,
-    createdAt: existing.createdAt || updatedAt,
+    createdAt,
     updatedAt,
-    state: sanitizeBoardState(inputState)
+    lastActivityAt,
+    emptySinceAt: isEmpty
+      ? (toStringValue(entry.emptySinceAt) || updatedAt || createdAt || lastActivityAt)
+      : "",
+    state
   };
+}
 
-  await storeSetJson(boardCode, entry);
+function isBoardStateEmpty(state) {
+  const groups = Array.isArray(state?.groups) ? state.groups : [];
+  const stash = Array.isArray(state?.stash) ? state.stash : [];
 
-  return entry;
+  const hasAssignedCharacters = groups.some((group) => (
+    Array.isArray(group?.parties)
+      && group.parties.some((party) => Array.isArray(party) && party.length > 0)
+  ));
+
+  return !hasAssignedCharacters && stash.length === 0;
+}
+
+function getBoardExpiration(entry, now = Date.now()) {
+  const emptySinceAt = parseTimestamp(entry.emptySinceAt);
+  if (entry.emptySinceAt && Number.isFinite(emptySinceAt) && now - emptySinceAt >= EMPTY_BOARD_TTL_MS) {
+    return {
+      expired: true,
+      message: "공유 보드가 만료되어 삭제되었습니다. 그룹 편성과 보관함이 1시간 이상 비어 있었습니다."
+    };
+  }
+
+  const lastActivityAt = parseTimestamp(entry.lastActivityAt)
+    || parseTimestamp(entry.updatedAt)
+    || parseTimestamp(entry.createdAt);
+
+  if (Number.isFinite(lastActivityAt) && now - lastActivityAt >= INACTIVE_BOARD_TTL_MS) {
+    return {
+      expired: true,
+      message: "공유 보드가 만료되어 삭제되었습니다. 2주 이상 접속이나 편집이 없었습니다."
+    };
+  }
+
+  return {
+    expired: false,
+    message: ""
+  };
+}
+
+function shouldTouchBoardActivity(entry, now = Date.now()) {
+  const lastActivityAt = parseTimestamp(entry.lastActivityAt)
+    || parseTimestamp(entry.updatedAt)
+    || parseTimestamp(entry.createdAt);
+
+  if (!Number.isFinite(lastActivityAt)) {
+    return true;
+  }
+
+  return now - lastActivityAt >= ACTIVITY_TOUCH_INTERVAL_MS;
+}
+
+async function maybeCleanupExpiredBoards() {
+  const cleanupMeta = await storeGetJson(CLEANUP_META_KEY);
+  const lastRunAt = parseTimestamp(cleanupMeta?.lastRunAt);
+  const now = Date.now();
+
+  if (Number.isFinite(lastRunAt) && now - lastRunAt < CLEANUP_RUN_INTERVAL_MS) {
+    return;
+  }
+
+  const keys = await storeListKeys();
+  let deletedCount = 0;
+
+  for (const key of keys) {
+    if (!BOARD_CODE_PATTERN.test(key)) {
+      continue;
+    }
+
+    const entry = normalizeBoardEntry(key, await storeGetJson(key));
+    if (!entry) {
+      continue;
+    }
+
+    if (getBoardExpiration(entry, now).expired) {
+      await storeDelete(key);
+      deletedCount += 1;
+    }
+  }
+
+  await storeSetJson(CLEANUP_META_KEY, {
+    lastRunAt: new Date(now).toISOString(),
+    deletedCount
+  });
 }
 
 function sanitizeBoardState(inputState) {
@@ -310,6 +459,36 @@ async function storeSetJson(key, value, options = {}) {
   }
 }
 
+async function storeDelete(key) {
+  try {
+    await getBlobStore().delete(key);
+  } catch (error) {
+    if (!isLocalFallbackCandidate(error)) {
+      throw error;
+    }
+
+    const store = await readLocalStore();
+    delete store[key];
+    await writeLocalStore(store);
+  }
+}
+
+async function storeListKeys() {
+  try {
+    const result = await getBlobStore().list();
+    return Array.isArray(result?.blobs)
+      ? result.blobs.map((blob) => blob?.key).filter(Boolean)
+      : [];
+  } catch (error) {
+    if (!isLocalFallbackCandidate(error)) {
+      throw error;
+    }
+
+    const store = await readLocalStore();
+    return Object.keys(store);
+  }
+}
+
 function getBlobStore() {
   return getStore(BOARD_STORE_NAME);
 }
@@ -341,6 +520,16 @@ async function writeLocalStore(value) {
 
 function toStringValue(value) {
   return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function parseTimestamp(value) {
+  const normalized = toStringValue(value);
+  if (!normalized) {
+    return Number.NaN;
+  }
+
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : Number.NaN;
 }
 
 function createError(statusCode, message) {

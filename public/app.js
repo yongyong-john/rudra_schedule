@@ -251,12 +251,20 @@ function bindEvents() {
 }
 
 function activateLocalMode(options = {}) {
+  const nextState = options.preserveState
+    ? normalizeStoredState(exportBoardState(), createDefaultState())
+    : hydrateLocalState();
+
   stopServerSync();
   session.mode = "local";
   session.boardCode = "";
   session.lastServerUpdatedAt = "";
   session.statusMessage = "기본 URL은 현재 브라우저에만 저장됩니다. 공유가 필요할 때 Url 공유를 누르세요.";
-  state = hydrateLocalState();
+  state = nextState;
+
+  if (options.preserveState) {
+    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(exportBoardState(nextState)));
+  }
 
   if (options.clearUrl) {
     clearBoardCodeInLocation({ replace: true });
@@ -345,6 +353,21 @@ async function handleCopyShareLink() {
     const shareLink = getShareLink(session.boardCode);
     showToast(`공유 URL을 복사하지 못했습니다. ${shareLink}`, "warn");
   }
+}
+
+function handleUnavailableSharedBoard(error) {
+  const boardCode = session.boardCode;
+
+  activateLocalMode({
+    clearUrl: true,
+    preserveState: true,
+    skipToast: true
+  });
+
+  showToast(
+    error.message || `공유 보드 ${boardCode}를 찾지 못해 기본 URL 로컬 보드로 전환했습니다.`,
+    "warn"
+  );
 }
 
 async function handleLocationChange() {
@@ -1205,6 +1228,11 @@ function scheduleServerSave() {
   clearTimeout(session.saveTimer);
   session.saveTimer = window.setTimeout(() => {
     saveServerBoard().catch((error) => {
+      if (isUnavailableSharedBoardError(error)) {
+        handleUnavailableSharedBoard(error);
+        return;
+      }
+
       showToast(error.message || "서버 보드를 저장하지 못했습니다.", "error");
     });
   }, SERVER_SAVE_DEBOUNCE_MS);
@@ -1230,6 +1258,13 @@ async function saveServerBoard() {
 
     session.lastServerUpdatedAt = response.updatedAt || session.lastServerUpdatedAt;
     session.statusMessage = `공유 보드 저장 완료 · 코드 ${session.boardCode}`;
+  } catch (error) {
+    if (isUnavailableSharedBoardError(error)) {
+      handleUnavailableSharedBoard(error);
+      return;
+    }
+
+    throw error;
   } finally {
     session.isSaving = false;
     renderSharePanel();
@@ -1244,7 +1279,11 @@ function startServerSync() {
   }
 
   session.syncTimer = window.setInterval(() => {
-    syncServerBoard({ silent: true }).catch(() => {});
+    syncServerBoard({ silent: true }).catch((error) => {
+      if (isUnavailableSharedBoardError(error)) {
+        handleUnavailableSharedBoard(error);
+      }
+    });
   }, SERVER_POLL_INTERVAL_MS);
 }
 
@@ -1338,10 +1377,16 @@ async function requestBoardApi(action, options) {
   const payload = await response.json();
 
   if (!response.ok) {
-    throw new Error(payload.error || "서버 보드 요청에 실패했습니다.");
+    const error = new Error(payload.error || "서버 보드 요청에 실패했습니다.");
+    error.statusCode = response.status;
+    throw error;
   }
 
   return payload;
+}
+
+function isUnavailableSharedBoardError(error) {
+  return Number(error?.statusCode) === 404;
 }
 
 function formatPower(value) {
