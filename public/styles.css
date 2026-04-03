@@ -472,26 +472,26 @@ select {
 
 .character-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 102px;
   gap: 10px;
-  align-items: start;
 }
 
-.character-card.is-compact .character-layout {
-  grid-template-columns: minmax(0, 1fr) 90px;
+.character-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.character-overview {
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
-}
-
-.character-main {
   min-width: 0;
-}
-
-.character-top {
-  margin-bottom: 8px;
 }
 
 .character-title-wrap {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .character-name {
@@ -506,21 +506,32 @@ select {
   font-size: 15px;
 }
 
-.character-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.card-remove-btn {
+.card-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-height: 28px;
-  padding: 0 8px;
-  border: 1px solid rgba(184, 77, 77, 0.14);
+  padding: 0 9px;
+  border: 1px solid rgba(96, 113, 104, 0.14);
   border-radius: 999px;
-  background: rgba(184, 77, 77, 0.08);
-  color: var(--danger);
+  background: rgba(96, 113, 104, 0.08);
+  color: var(--text);
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.card-action-btn.is-danger {
+  border-color: rgba(184, 77, 77, 0.14);
+  background: rgba(184, 77, 77, 0.08);
+  color: var(--danger);
+}
+
+.card-action-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
 .character-sub {
@@ -535,11 +546,6 @@ select {
   font-size: 11px;
 }
 
-.character-meta {
-  display: grid;
-  gap: 0;
-}
-
 .character-class {
   display: inline-flex;
   align-items: center;
@@ -552,6 +558,7 @@ select {
   font-weight: 700;
   color: var(--text);
   width: fit-content;
+  flex-shrink: 0;
 }
 
 .character-card.is-compact .character-class {
@@ -572,15 +579,9 @@ select {
   height: 16px;
 }
 
-.character-side {
-  display: grid;
-  gap: 6px;
-  align-content: start;
-}
-
 .metric-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -837,17 +838,9 @@ select {
     width: 100%;
   }
 
-  .character-layout,
-  .character-card.is-compact .character-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .character-side {
-    grid-template-columns: 1fr;
-  }
-
-  .character-actions {
-    justify-content: flex-start;
+  .character-head,
+  .character-overview {
+    align-items: flex-start;
   }
 
   .hero-meta {

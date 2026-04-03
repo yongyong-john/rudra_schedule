@@ -740,6 +740,11 @@ function createStashCharacterCard(character, index) {
 
   const card = createCharacterCard(character, {
     compact: false,
+    action: {
+      kind: "delete",
+      label: "삭제",
+      onClick: () => deleteCharacterFromStash(character.id)
+    },
     source: {
       type: "stash",
       characterId: character.id,
@@ -832,11 +837,11 @@ function createCharacterCard(character, options) {
   const layout = document.createElement("div");
   layout.className = "character-layout";
 
-  const main = document.createElement("div");
-  main.className = "character-main";
+  const head = document.createElement("div");
+  head.className = "character-head";
 
-  const top = document.createElement("div");
-  top.className = "character-top";
+  const overview = document.createElement("div");
+  overview.className = "character-overview";
 
   const titleWrap = document.createElement("div");
   titleWrap.className = "character-title-wrap";
@@ -850,10 +855,6 @@ function createCharacterCard(character, options) {
   sub.textContent = serverLabel || "서버 정보 없음";
 
   titleWrap.append(name, sub);
-  top.appendChild(titleWrap);
-
-  const meta = document.createElement("div");
-  meta.className = "character-meta";
 
   const className = document.createElement("div");
   className.className = "character-class";
@@ -870,30 +871,19 @@ function createCharacterCard(character, options) {
   classLabel.textContent = character.className || "미확인";
   className.appendChild(classLabel);
 
-  meta.appendChild(className);
-  main.append(top, meta);
+  overview.append(titleWrap, className);
+  head.appendChild(overview);
 
-  const side = document.createElement("div");
-  side.className = "character-side";
+  const actionConfig = options.action || (typeof options.onRemove === "function"
+    ? {
+        kind: "remove",
+        label: "제거",
+        onClick: options.onRemove
+      }
+    : null);
 
-  const actions = document.createElement("div");
-  actions.className = "character-actions";
-
-  if (typeof options.onRemove === "function") {
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "card-remove-btn";
-    removeButton.draggable = false;
-    removeButton.textContent = "제거";
-    removeButton.addEventListener("mousedown", (event) => event.stopPropagation());
-    removeButton.addEventListener("dragstart", (event) => event.preventDefault());
-    removeButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      options.onRemove();
-    });
-    actions.appendChild(removeButton);
-    side.appendChild(actions);
+  if (actionConfig?.onClick) {
+    head.appendChild(createCardActionButton(actionConfig));
   }
 
   const metrics = document.createElement("div");
@@ -903,10 +893,49 @@ function createCharacterCard(character, options) {
     createMetricBlock("아이템 레벨", formatPower(character.itemLevel))
   );
 
-  side.appendChild(metrics);
-  layout.append(main, side);
+  layout.append(head, metrics);
   card.append(layout);
   return card;
+}
+
+function createCardActionButton(actionConfig) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `card-action-btn${actionConfig.kind === "delete" ? " is-danger" : ""}`;
+  button.draggable = false;
+  button.addEventListener("mousedown", (event) => event.stopPropagation());
+  button.addEventListener("dragstart", (event) => event.preventDefault());
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    actionConfig.onClick();
+  });
+
+  if (actionConfig.kind === "delete") {
+    button.append(createTrashIcon());
+  }
+
+  const label = document.createElement("span");
+  label.textContent = actionConfig.label;
+  button.appendChild(label);
+  return button;
+}
+
+function createTrashIcon() {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.classList.add("card-action-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M9 3h6l1 2h4v2H4V5h4l1-2zm1 7h2v7h-2v-7zm4 0h2v7h-2v-7zM7 10h2v7H7v-7zm1 10h8a2 2 0 0 0 2-2V8H6v10a2 2 0 0 0 2 2z"
+  );
+  path.setAttribute("fill", "currentColor");
+  icon.appendChild(path);
+
+  return icon;
 }
 
 function createMetricBlock(label, value) {
@@ -931,15 +960,15 @@ function clearGroup(groupId) {
     return;
   }
 
-  if (!window.confirm("이 그룹의 배치 인원을 모두 해제할까요?")) {
+  if (!window.confirm("이 그룹의 배치 인원을 모두 보관함으로 이동할까요?")) {
     return;
   }
 
   group.parties = [[], []];
-  state.results = mergeCharacters(state.results, releasedCharacters, false);
+  state.stash = mergeStashCharacters(state.stash, releasedCharacters);
   persistState();
   render();
-  showToast("그룹 인원을 모두 해제했습니다.");
+  showToast("그룹 인원을 모두 보관함으로 이동했습니다.");
 }
 
 function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIndex) {
@@ -1079,6 +1108,17 @@ function removeCharacterFromStash(characterId) {
   return state.stash.splice(index, 1)[0];
 }
 
+function deleteCharacterFromStash(characterId) {
+  const character = removeCharacterFromStash(characterId);
+  if (!character) {
+    return;
+  }
+
+  persistState();
+  render();
+  showToast(`${character.name}을 보관함에서 삭제했습니다.`);
+}
+
 function removeGroup(groupId) {
   const groupIndex = state.groups.findIndex((group) => group.id === groupId);
   if (groupIndex === -1) {
@@ -1137,6 +1177,26 @@ function mergeCharacters(existingCharacters, incomingCharacters, replace) {
   });
 
   return sortResultCharacters(Array.from(nextMap.values()));
+}
+
+function mergeStashCharacters(existingCharacters, incomingCharacters) {
+  const nextMap = new Map();
+
+  existingCharacters.forEach((character) => {
+    const normalized = normalizeCharacter(character);
+    if (normalized) {
+      nextMap.set(normalized.id, normalized);
+    }
+  });
+
+  incomingCharacters.forEach((character) => {
+    const normalized = normalizeCharacter(character);
+    if (normalized && !nextMap.has(normalized.id)) {
+      nextMap.set(normalized.id, normalized);
+    }
+  });
+
+  return Array.from(nextMap.values());
 }
 
 function syncAssignedCardsWithResults(results) {
