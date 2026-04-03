@@ -343,8 +343,8 @@ async function handleReloadServerBoard() {
   }
 
   try {
-    await syncServerBoard({ silent: false });
-    showToast("서버 보드를 다시 불러왔습니다.");
+    const updated = await syncServerBoard({ silent: false });
+    showToast(updated ? "서버 보드를 다시 불러왔습니다." : "서버 최신 저장본과 동일합니다.");
   } catch (error) {
     showToast(error.message || "서버 보드를 다시 불러오지 못했습니다.", "error");
   }
@@ -1250,7 +1250,7 @@ function stopServerSync() {
 
 async function syncServerBoard({ silent }) {
   if (session.mode !== "server" || !session.boardCode) {
-    return;
+    return false;
   }
 
   const response = await requestBoardApi("load", {
@@ -1258,8 +1258,12 @@ async function syncServerBoard({ silent }) {
     boardCode: session.boardCode
   });
 
-  if (!response.updatedAt || response.updatedAt === session.lastServerUpdatedAt) {
-    return;
+  if (!response.updatedAt) {
+    return false;
+  }
+
+  if (session.lastServerUpdatedAt && response.updatedAt <= session.lastServerUpdatedAt) {
+    return false;
   }
 
   session.isApplyingRemote = true;
@@ -1270,6 +1274,7 @@ async function syncServerBoard({ silent }) {
     : `서버 편성을 다시 불러왔습니다.`;
   session.isApplyingRemote = false;
   render();
+  return true;
 }
 
 function showLaunchOverlay(message) {
