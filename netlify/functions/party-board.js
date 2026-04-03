@@ -15,7 +15,7 @@ const LOCAL_STORE_PATH = path.join(process.cwd(), ".data", "party-board-store.js
 exports.handler = async function handler(event) {
   const headers = createHeaders();
 
-  if (event?.blobs) {
+  if (event?.blobs && !process.env.NETLIFY_BLOBS_CONTEXT && !globalThis.netlifyBlobsContext) {
     connectLambda(event);
   }
 
@@ -263,7 +263,20 @@ function jsonResponse(statusCode, payload, headers) {
 
 async function storeGetJson(key) {
   try {
-    return await getBlobStore().get(key, { type: "json" });
+    const store = getBlobStore();
+
+    try {
+      return await store.get(key, {
+        consistency: "strong",
+        type: "json"
+      });
+    } catch (error) {
+      if (!String(error?.message || "").includes("uncachedEdgeURL")) {
+        throw error;
+      }
+
+      return await store.get(key, { type: "json" });
+    }
   } catch (error) {
     if (!isLocalFallbackCandidate(error)) {
       throw error;
