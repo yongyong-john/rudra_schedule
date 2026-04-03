@@ -63,6 +63,15 @@ exports.handler = async function handler(event) {
   }
 };
 
+exports.config = {
+  path: "/.netlify/functions/party-board",
+  rateLimit: {
+    windowLimit: 30,
+    windowSize: 60,
+    aggregateBy: ["ip", "domain"]
+  }
+};
+
 async function createBoard(inputState) {
   await maybeCleanupExpiredBoards();
   const state = sanitizeBoardState(inputState);

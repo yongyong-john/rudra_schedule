@@ -1,7 +1,7 @@
 const LOCAL_STORAGE_KEY = "plaync-party-builder:local:v2";
 const BOARD_CODE_PARAM = "board";
-const SERVER_POLL_INTERVAL_MS = 2000;
-const SERVER_SAVE_DEBOUNCE_MS = 500;
+const SERVER_POLL_INTERVAL_MS = 15000;
+const SERVER_SAVE_DEBOUNCE_MS = 1500;
 
 const PRODUCT_OPTIONS = [
   { value: "aion2", label: "AION2" }
@@ -307,9 +307,17 @@ function bindEvents() {
     });
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && session.mode === "server" && session.boardCode) {
-      syncServerBoard({ silent: true }).catch(() => {});
+    if (session.mode !== "server" || !session.boardCode) {
+      return;
     }
+
+    if (document.hidden) {
+      stopServerSync({ keepSaveTimer: true });
+      return;
+    }
+
+    startServerSync();
+    syncServerBoard({ silent: true }).catch(() => {});
   });
 
   elements.addGroupBtn.addEventListener("click", () => {
@@ -409,7 +417,7 @@ async function activateServerBoard(boardCode, options = {}) {
   session.boardCode = response.boardCode;
   session.lastServerUpdatedAt = response.updatedAt || "";
   session.statusMessage = options.fromSharedLink
-    ? "공유 URL에 연결되었습니다. 변경 내용은 약 2초 간격으로 동기화됩니다."
+    ? "공유 URL에 연결되었습니다. 변경 내용은 활성 탭에서 약 15초 간격으로 동기화됩니다."
     : "공유 보드를 불러왔습니다.";
   state = normalizeStoredState(response.state, createDefaultState());
 
@@ -583,7 +591,7 @@ function renderSharePanel() {
   if (isServerMode) {
     const syncLabel = session.isSaving
       ? "서버에 저장 중입니다."
-      : "같은 공유 URL로 접속한 사람들과 약 2초 간격으로 동기화됩니다.";
+      : "같은 공유 URL로 접속한 사람들과 활성 탭에서 약 15초 간격으로 동기화됩니다.";
     elements.shareStatusText.textContent = session.statusMessage || syncLabel;
     return;
   }
@@ -1464,9 +1472,9 @@ async function saveServerBoard() {
 }
 
 function startServerSync() {
-  stopServerSync();
+  stopServerSync({ keepSaveTimer: true });
 
-  if (session.mode !== "server" || !session.boardCode) {
+  if (session.mode !== "server" || !session.boardCode || document.hidden) {
     return;
   }
 
@@ -1479,10 +1487,13 @@ function startServerSync() {
   }, SERVER_POLL_INTERVAL_MS);
 }
 
-function stopServerSync() {
-  clearTimeout(session.saveTimer);
+function stopServerSync(options = {}) {
+  if (!options.keepSaveTimer) {
+    clearTimeout(session.saveTimer);
+    session.saveTimer = null;
+  }
+
   clearInterval(session.syncTimer);
-  session.saveTimer = null;
   session.syncTimer = null;
   session.isSaving = false;
 }
