@@ -1,0 +1,10 @@
+{
+  "name": "rudra-schedule-plaync",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "npx netlify dev",
+    "serve": "python3 -m http.server 8080 -d public"
+  }
+}
