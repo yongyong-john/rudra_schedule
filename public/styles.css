@@ -317,6 +317,12 @@ select {
   border-top: 1px solid var(--line);
 }
 
+.stash-section-standalone {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .stash-head {
   display: flex;
   justify-content: space-between;
