@@ -263,10 +263,7 @@ function jsonResponse(statusCode, payload, headers) {
 
 async function storeGetJson(key) {
   try {
-    return await getBlobStore().get(key, {
-      consistency: "strong",
-      type: "json"
-    });
+    return await getBlobStore().get(key, { type: "json" });
   } catch (error) {
     if (!isLocalFallbackCandidate(error)) {
       throw error;
