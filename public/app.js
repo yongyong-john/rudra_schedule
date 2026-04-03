@@ -1,6 +1,6 @@
 const LOCAL_STORAGE_KEY = "plaync-party-builder:local:v2";
 const BOARD_CODE_PARAM = "board";
-const SERVER_POLL_INTERVAL_MS = 10000;
+const SERVER_POLL_INTERVAL_MS = 2000;
 const SERVER_SAVE_DEBOUNCE_MS = 500;
 
 const PRODUCT_OPTIONS = [
@@ -12,18 +12,10 @@ const elements = {
   assignmentSummary: document.getElementById("assignmentSummary"),
   boardCodeBlock: document.getElementById("boardCodeBlock"),
   boardCodeValue: document.getElementById("boardCodeValue"),
-  boardModeBadge: document.getElementById("boardModeBadge"),
   clearResultsBtn: document.getElementById("clearResultsBtn"),
-  chooseLocalBtn: document.getElementById("chooseLocalBtn"),
-  chooseServerCreateBtn: document.getElementById("chooseServerCreateBtn"),
-  copyShareLinkBtn: document.getElementById("copyShareLinkBtn"),
   groupsContainer: document.getElementById("groupsContainer"),
   keywordInput: document.getElementById("keywordInput"),
-  launchCopy: document.getElementById("launchCopy"),
-  launchOverlay: document.getElementById("launchOverlay"),
-  loadServerBoardBtn: document.getElementById("loadServerBoardBtn"),
   productSelect: document.getElementById("productSelect"),
-  reloadServerBtn: document.getElementById("reloadServerBtn"),
   resultsCount: document.getElementById("resultsCount"),
   resultsList: document.getElementById("resultsList"),
   resultsReleaseZone: document.getElementById("resultsReleaseZone"),
@@ -32,10 +24,8 @@ const elements = {
   searchHint: document.getElementById("searchHint"),
   searchStatus: document.getElementById("searchStatus"),
   serverInput: document.getElementById("serverInput"),
-  serverLoadInput: document.getElementById("serverLoadInput"),
-  sessionActions: document.getElementById("sessionActions"),
-  sessionPanel: document.getElementById("sessionPanel"),
-  sessionStatusText: document.getElementById("sessionStatusText"),
+  shareBoardBtn: document.getElementById("shareBoardBtn"),
+  shareStatusText: document.getElementById("shareStatusText"),
   stashContainer: document.getElementById("stashContainer"),
   stashCount: document.getElementById("stashCount"),
   sortSelect: document.getElementById("sortSelect"),
@@ -74,8 +64,7 @@ function createSessionState() {
     isApplyingRemote: false,
     isSaving: false,
     lastServerUpdatedAt: "",
-    launchVisible: false,
-    mode: "booting",
+    mode: "local",
     saveTimer: null,
     statusMessage: "",
     syncTimer: null
@@ -91,17 +80,13 @@ async function initializeApp() {
       return;
     } catch (error) {
       clearBoardCodeInLocation();
-      state = hydrateLocalState();
-      showLaunchOverlay("공유 링크 보드를 불러오지 못했습니다. 새 서버 보드를 만들거나 다른 코드를 입력해 주세요.");
-      render();
+      activateLocalMode({ skipToast: true });
       showToast(error.message || "공유 링크 보드를 불러오지 못했습니다.", "error");
       return;
     }
   }
 
-  state = hydrateLocalState();
-  showLaunchOverlay();
-  render();
+  activateLocalMode({ skipToast: true });
 }
 
 function hydrateLocalState() {
@@ -228,17 +213,18 @@ function syncForm() {
 }
 
 function bindEvents() {
-  elements.chooseLocalBtn.addEventListener("click", activateLocalMode);
-  elements.chooseServerCreateBtn.addEventListener("click", handleCreateServerBoard);
-  elements.loadServerBoardBtn.addEventListener("click", handleLoadServerBoard);
-  elements.serverLoadInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      handleLoadServerBoard();
+  elements.shareBoardBtn.addEventListener("click", handleShareBoard);
+  window.addEventListener("popstate", () => {
+    handleLocationChange().catch((error) => {
+      activateLocalMode({ skipToast: true });
+      showToast(error.message || "공유 보드 상태를 불러오지 못했습니다.", "error");
+    });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && session.mode === "server" && session.boardCode) {
+      syncServerBoard({ silent: true }).catch(() => {});
     }
   });
-  elements.copyShareLinkBtn.addEventListener("click", handleCopyShareLink);
-  elements.reloadServerBtn.addEventListener("click", handleReloadServerBoard);
 
   elements.addGroupBtn.addEventListener("click", () => {
     state.groups.push(createGroup(state.nextGroupId));
@@ -264,56 +250,57 @@ function bindEvents() {
   elements.resultsReleaseZone.addEventListener("drop", handleDropToReleaseZone);
 }
 
-async function activateLocalMode() {
+function activateLocalMode(options = {}) {
   stopServerSync();
   session.mode = "local";
   session.boardCode = "";
   session.lastServerUpdatedAt = "";
-  session.statusMessage = "이 브라우저에만 저장됩니다.";
+  session.statusMessage = "기본 URL은 현재 브라우저에만 저장됩니다. 공유가 필요할 때 Url 공유를 누르세요.";
   state = hydrateLocalState();
-  clearBoardCodeInLocation();
-  hideLaunchOverlay();
+
+  if (options.clearUrl) {
+    clearBoardCodeInLocation({ replace: true });
+  }
+
   render();
-  showToast("로컬 저장 모드로 시작했습니다.");
-}
 
-async function handleCreateServerBoard() {
-  try {
-    const response = await requestBoardApi("create", {
-      method: "POST",
-      body: {
-        state: exportBoardState(createDefaultState())
-      }
-    });
-
-    session.mode = "server";
-    session.boardCode = response.boardCode;
-    session.lastServerUpdatedAt = response.updatedAt || "";
-    session.statusMessage = "서버 보드가 생성되었습니다. 공유 링크로 같은 보드를 불러올 수 있습니다.";
-    state = normalizeStoredState(response.state, createDefaultState());
-    setBoardCodeInLocation(response.boardCode);
-    hideLaunchOverlay();
-    startServerSync();
-    render();
-    showToast(`서버 보드 ${response.boardCode}를 생성했습니다.`);
-  } catch (error) {
-    showToast(error.message || "서버 보드를 생성하지 못했습니다.", "error");
+  if (!options.skipToast) {
+    showToast(options.toastMessage || "기본 URL 로컬 보드를 불러왔습니다.");
   }
 }
 
-async function handleLoadServerBoard() {
-  const boardCode = normalizeBoardCodeInput(elements.serverLoadInput.value);
-  if (!boardCode) {
-    showToast("8자리 보드 코드를 입력해 주세요.", "warn");
-    elements.serverLoadInput.focus();
+async function handleShareBoard() {
+  if (session.mode === "server" && session.boardCode) {
+    await handleCopyShareLink();
     return;
   }
 
   try {
-    await activateServerBoard(boardCode, { fromSharedLink: false });
-    showToast(`서버 보드 ${boardCode}를 불러왔습니다.`);
+    const response = await requestBoardApi("create", {
+      method: "POST",
+      body: {
+        state: exportBoardState()
+      }
+    });
+
+    stopServerSync();
+    session.mode = "server";
+    session.boardCode = response.boardCode;
+    session.lastServerUpdatedAt = response.updatedAt || "";
+    session.statusMessage = "공유 보드가 생성되었습니다. 같은 URL에서 함께 편집할 수 있습니다.";
+    state = normalizeStoredState(response.state, createDefaultState());
+    setBoardCodeInLocation(response.boardCode, { replace: false });
+    startServerSync();
+    render();
+    const copied = await copyShareLinkToClipboard(response.boardCode);
+    showToast(
+      copied
+        ? `공유 보드 ${response.boardCode}를 만들고 URL을 복사했습니다.`
+        : `공유 보드 ${response.boardCode}를 만들었습니다.`,
+      copied ? "info" : "warn"
+    );
   } catch (error) {
-    showToast(error.message || "서버 보드를 불러오지 못했습니다.", "error");
+    showToast(error.message || "공유 보드를 생성하지 못했습니다.", "error");
   }
 }
 
@@ -328,26 +315,16 @@ async function activateServerBoard(boardCode, options = {}) {
   session.boardCode = response.boardCode;
   session.lastServerUpdatedAt = response.updatedAt || "";
   session.statusMessage = options.fromSharedLink
-    ? "공유 링크로 접속한 서버 보드입니다."
-    : "서버 보드를 불러왔습니다.";
+    ? "공유 URL에 연결되었습니다. 변경 내용은 약 2초 간격으로 동기화됩니다."
+    : "공유 보드를 불러왔습니다.";
   state = normalizeStoredState(response.state, createDefaultState());
-  setBoardCodeInLocation(response.boardCode);
-  hideLaunchOverlay();
+
+  if (options.updateUrl !== false) {
+    setBoardCodeInLocation(response.boardCode);
+  }
+
   startServerSync();
   render();
-}
-
-async function handleReloadServerBoard() {
-  if (session.mode !== "server" || !session.boardCode) {
-    return;
-  }
-
-  try {
-    const updated = await syncServerBoard({ silent: false });
-    showToast(updated ? "서버 보드를 다시 불러왔습니다." : "서버 최신 저장본과 동일합니다.");
-  } catch (error) {
-    showToast(error.message || "서버 보드를 다시 불러오지 못했습니다.", "error");
-  }
 }
 
 async function handleCopyShareLink() {
@@ -355,13 +332,55 @@ async function handleCopyShareLink() {
     return;
   }
 
-  const shareLink = getShareLink(session.boardCode);
+  try {
+    const copied = await copyShareLinkToClipboard(session.boardCode);
+    if (copied) {
+      showToast("공유 URL을 복사했습니다.");
+      return;
+    }
+
+    const shareLink = getShareLink(session.boardCode);
+    showToast(`공유 URL을 복사하지 못했습니다. ${shareLink}`, "warn");
+  } catch (error) {
+    const shareLink = getShareLink(session.boardCode);
+    showToast(`공유 URL을 복사하지 못했습니다. ${shareLink}`, "warn");
+  }
+}
+
+async function handleLocationChange() {
+  const boardCode = readBoardCodeFromLocation();
+
+  if (!boardCode) {
+    if (session.mode === "server") {
+      activateLocalMode({ skipToast: true });
+    }
+    return;
+  }
+
+  if (session.mode === "server" && session.boardCode === boardCode) {
+    return;
+  }
+
+  try {
+    await activateServerBoard(boardCode, {
+      fromSharedLink: true,
+      updateUrl: false
+    });
+  } catch (error) {
+    clearBoardCodeInLocation();
+    activateLocalMode({ skipToast: true });
+    throw error;
+  }
+}
+
+async function copyShareLinkToClipboard(boardCode) {
+  const shareLink = getShareLink(boardCode);
 
   try {
     await navigator.clipboard.writeText(shareLink);
-    showToast("공유 링크를 복사했습니다.");
+    return true;
   } catch (error) {
-    showToast(`공유 링크를 복사하지 못했습니다. ${shareLink}`, "warn");
+    return false;
   }
 }
 
@@ -437,8 +456,7 @@ async function handleSearchSubmit(event) {
 }
 
 function render() {
-  renderSessionPanel();
-  renderLaunchOverlay();
+  renderSharePanel();
   renderSummary();
   renderGroups();
   renderStash();
@@ -447,32 +465,22 @@ function render() {
   syncForm();
 }
 
-function renderSessionPanel() {
+function renderSharePanel() {
   const isServerMode = session.mode === "server";
-  const isLocalMode = session.mode === "local";
-
-  elements.sessionPanel.hidden = !isServerMode && !isLocalMode;
-  elements.boardModeBadge.textContent = isServerMode ? "서버 저장" : "로컬 저장";
   elements.boardCodeBlock.hidden = !isServerMode;
   elements.boardCodeValue.textContent = session.boardCode || "--------";
-  elements.sessionActions.hidden = !isServerMode;
+  elements.shareBoardBtn.textContent = isServerMode ? "공유 URL 복사" : "Url 공유";
 
   if (isServerMode) {
-    const syncLabel = session.isSaving ? "서버에 저장 중입니다." : "공유 링크로 같은 보드를 불러올 수 있습니다.";
-    elements.sessionStatusText.textContent = session.statusMessage || syncLabel;
+    const syncLabel = session.isSaving
+      ? "서버에 저장 중입니다."
+      : "같은 공유 URL로 접속한 사람들과 약 2초 간격으로 동기화됩니다.";
+    elements.shareStatusText.textContent = session.statusMessage || syncLabel;
     return;
   }
 
-  if (isLocalMode) {
-    elements.sessionStatusText.textContent = session.statusMessage || "이 브라우저에만 저장됩니다.";
-    return;
-  }
-
-  elements.sessionStatusText.textContent = "";
-}
-
-function renderLaunchOverlay() {
-  elements.launchOverlay.hidden = !session.launchVisible;
+  elements.shareStatusText.textContent = session.statusMessage
+    || "기본 URL에서는 현재 브라우저에만 저장됩니다. 공유가 필요할 때 Url 공유를 누르세요.";
 }
 
 function renderSummary() {
@@ -482,7 +490,7 @@ function renderSummary() {
   elements.assignmentSummary.textContent = `${assignedCount} / ${capacity} 배치`;
   elements.resultsCount.textContent = `검색 결과 ${visibleResults.length}명`;
   elements.stashCount.textContent = `보관 ${state.stash.length}명`;
-  elements.searchButton.disabled = state.ui.searchLoading || session.mode === "booting";
+  elements.searchButton.disabled = state.ui.searchLoading;
   elements.searchButton.textContent = state.ui.searchLoading ? "검색 중..." : "검색";
 }
 
@@ -1164,7 +1172,7 @@ function cloneCharacter(character) {
 }
 
 function persistState() {
-  if (session.isApplyingRemote || session.mode === "booting") {
+  if (session.isApplyingRemote) {
     return;
   }
 
@@ -1209,7 +1217,7 @@ async function saveServerBoard() {
 
   session.isSaving = true;
   session.statusMessage = "서버에 저장 중입니다.";
-  renderSessionPanel();
+  renderSharePanel();
 
   try {
     const response = await requestBoardApi("save", {
@@ -1221,10 +1229,10 @@ async function saveServerBoard() {
     });
 
     session.lastServerUpdatedAt = response.updatedAt || session.lastServerUpdatedAt;
-    session.statusMessage = `서버 저장 완료 · 코드 ${session.boardCode}`;
+    session.statusMessage = `공유 보드 저장 완료 · 코드 ${session.boardCode}`;
   } finally {
     session.isSaving = false;
-    renderSessionPanel();
+    renderSharePanel();
   }
 }
 
@@ -1270,22 +1278,11 @@ async function syncServerBoard({ silent }) {
   state = normalizeStoredState(response.state, createDefaultState());
   session.lastServerUpdatedAt = response.updatedAt;
   session.statusMessage = silent
-    ? `서버에서 최신 편성을 반영했습니다.`
-    : `서버 편성을 다시 불러왔습니다.`;
+    ? "공유 보드의 최신 편성을 반영했습니다."
+    : "공유 보드 편성을 다시 불러왔습니다.";
   session.isApplyingRemote = false;
   render();
   return true;
-}
-
-function showLaunchOverlay(message) {
-  session.launchVisible = true;
-  elements.launchCopy.textContent = message
-    || "기본 URL에서는 새 로컬 작업을 시작하거나 서버 보드를 새로 만들 수 있습니다. 공유 링크로 들어오면 서버에 저장된 보드를 바로 불러옵니다.";
-  elements.serverLoadInput.value = "";
-}
-
-function hideLaunchOverlay() {
-  session.launchVisible = false;
 }
 
 function readBoardCodeFromLocation() {
@@ -1294,16 +1291,18 @@ function readBoardCodeFromLocation() {
   return normalizeBoardCodeInput(boardCode);
 }
 
-function setBoardCodeInLocation(boardCode) {
+function setBoardCodeInLocation(boardCode, options = {}) {
   const url = new URL(window.location.href);
   url.searchParams.set(BOARD_CODE_PARAM, boardCode);
-  window.history.replaceState({}, "", url.toString());
+  const method = options.replace === false ? "pushState" : "replaceState";
+  window.history[method]({}, "", url.toString());
 }
 
-function clearBoardCodeInLocation() {
+function clearBoardCodeInLocation(options = {}) {
   const url = new URL(window.location.href);
   url.searchParams.delete(BOARD_CODE_PARAM);
-  window.history.replaceState({}, "", url.toString());
+  const method = options.replace === false ? "pushState" : "replaceState";
+  window.history[method]({}, "", url.toString());
 }
 
 function normalizeBoardCodeInput(value) {
