@@ -2,7 +2,7 @@
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { getStore } = require("@netlify/blobs");
+const { connectLambda, getStore } = require("@netlify/blobs");
 
 const BOARD_CODE_LENGTH = 8;
 const BOARD_CODE_PATTERN = /^[A-Za-z0-9]{8}$/;
@@ -14,6 +14,10 @@ const LOCAL_STORE_PATH = path.join(process.cwd(), ".data", "party-board-store.js
 
 exports.handler = async function handler(event) {
   const headers = createHeaders();
+
+  if (event?.blobs) {
+    connectLambda(event);
+  }
 
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 200, headers, body: "" };
