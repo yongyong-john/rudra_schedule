@@ -1,12 +1,7 @@
 const STORAGE_KEY = "plaync-party-builder:v1";
 
 const PRODUCT_OPTIONS = [
-  { value: "aion2", label: "AION2" },
-  { value: "tl", label: "THRONE AND LIBERTY" },
-  { value: "hoyeon", label: "HOYEON" },
-  { value: "lineagew", label: "Lineage W" },
-  { value: "bns2", label: "BNS2" },
-  { value: "l2m", label: "Lineage 2M" }
+  { value: "aion2", label: "AION2" }
 ];
 
 const elements = {
@@ -132,6 +127,9 @@ function normalizeCharacter(character) {
       ? character.className.trim()
       : "미확인",
     combatPower: normalizePower(character.combatPower),
+    powerLabel: typeof character.powerLabel === "string" && character.powerLabel.trim()
+      ? character.powerLabel.trim()
+      : "전투력",
     serverId: typeof character.serverId === "string" ? character.serverId.trim() : "",
     serverName: typeof character.serverName === "string" ? character.serverName.trim() : "",
     worldName: typeof character.worldName === "string" ? character.worldName.trim() : ""
@@ -345,7 +343,7 @@ function renderResults() {
     emptyState.innerHTML = `
       <div>
         아직 불러온 캐릭터가 없습니다.<br />
-        하단 검색으로 PLAYNC 캐릭터를 먼저 가져오세요.
+        하단 검색으로 AION2 캐릭터를 먼저 가져오세요.
       </div>
     `;
     elements.resultsList.appendChild(emptyState);
@@ -359,16 +357,18 @@ function renderResults() {
 
 function renderSearchStatus() {
   if (state.ui.searchLoading) {
-    elements.searchStatus.textContent = "PLAYNC 공식 API에서 캐릭터를 조회하는 중입니다.";
+    elements.searchStatus.textContent = "AION2 공식 검색/랭킹 API에서 캐릭터를 조회하는 중입니다.";
     return;
   }
 
   if (state.ui.searchMeta?.searchPath) {
-    elements.searchStatus.textContent = `마지막 검색 엔드포인트: ${state.ui.searchMeta.searchPath}`;
+    const metricLabel = state.ui.searchMeta.displayMetric || "전투력";
+    elements.searchStatus.textContent =
+      `마지막 조회: AION2 공식 검색 API (${state.ui.searchMeta.searchPath}) · 표시 지표: ${metricLabel}`;
     return;
   }
 
-  elements.searchStatus.textContent = "검색어와 게임을 선택한 뒤 캐릭터를 불러오세요.";
+  elements.searchStatus.textContent = "AION2 서버와 캐릭터명을 입력한 뒤 검색하세요.";
 }
 
 function createResultCharacterCard(character) {
@@ -505,7 +505,7 @@ function createCharacterCard(character, options) {
   const power = document.createElement("div");
   power.className = "power-block";
   power.innerHTML = `
-    <span class="power-label">전투력</span>
+    <span class="power-label">${character.powerLabel || "전투력"}</span>
     <strong class="power-value">${formatPower(character.combatPower)}</strong>
   `;
 

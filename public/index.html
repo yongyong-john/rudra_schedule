@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PLAYNC 파티 빌더</title>
+    <title>AION2 파티 빌더</title>
     <meta
       name="description"
-      content="PLAYNC Developers API로 캐릭터를 검색하고 1파티/2파티 그룹을 드래그 앤 드롭으로 편성하는 웹 페이지"
+      content="AION2 공식 검색/랭킹 API로 캐릭터를 검색하고 1파티/2파티 그룹을 드래그 앤 드롭으로 편성하는 웹 페이지"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,14 +19,15 @@
   <body>
     <div class="page-shell">
       <header class="hero">
-        <p class="eyebrow">PLAYNC Developers + Netlify</p>
-        <h1>전투력 기반 파티 편성 보드</h1>
+        <p class="eyebrow">AION2 Official Search + Netlify</p>
+        <h1>AION2 파티 편성 보드</h1>
         <p class="hero-copy">
-          캐릭터를 검색한 뒤 드래그해서 1파티와 2파티에 배치하세요. 한 파티는 최대 4명, 한 그룹은
-          최대 8명까지 구성됩니다.
+          AION2 캐릭터를 검색한 뒤 드래그해서 1파티와 2파티에 배치하세요. 한 파티는 최대 4명, 한
+          그룹은 최대 8명까지 구성됩니다.
         </p>
         <div class="hero-meta">
-          <span>API Key는 Netlify 환경 변수에만 보관됩니다.</span>
+          <span>API Key는 Netlify 환경 변수에만 보관할 수 있습니다.</span>
+          <span>현재 공식 공개 캐릭터 검색 연동은 AION2 기준으로 구성되어 있습니다.</span>
           <span>검색 결과를 다시 드래그하면 다른 그룹으로 즉시 이동됩니다.</span>
         </div>
       </header>
@@ -62,11 +63,6 @@
             <span>게임</span>
             <select id="productSelect" name="product">
               <option value="aion2">AION2</option>
-              <option value="tl">THRONE AND LIBERTY</option>
-              <option value="hoyeon">HOYEON</option>
-              <option value="lineagew">Lineage W</option>
-              <option value="bns2">BNS2</option>
-              <option value="l2m">Lineage 2M</option>
             </select>
           </label>
 
@@ -76,7 +72,7 @@
               id="serverInput"
               name="server"
               type="text"
-              placeholder="예: 이스라펠01 또는 101"
+              placeholder="예: 에레슈키갈 또는 2007"
               autocomplete="off"
             />
           </label>
@@ -99,7 +95,7 @@
         </form>
 
         <div class="search-status-row">
-          <p class="search-status" id="searchStatus">검색어와 게임을 선택한 뒤 캐릭터를 불러오세요.</p>
+          <p class="search-status" id="searchStatus">AION2 서버와 캐릭터명을 입력한 뒤 검색하세요.</p>
           <button class="btn btn-ghost" id="clearResultsBtn" type="button">검색 결과 비우기</button>
         </div>
 
