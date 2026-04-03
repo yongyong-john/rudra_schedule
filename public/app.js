@@ -759,7 +759,12 @@ function createStashCharacterCard(character, index) {
 function createEndDropZone(groupId, partyIndex, insertIndex) {
   const zone = document.createElement("div");
   zone.className = "drop-target drop-target-end";
-  zone.textContent = "여기로 드롭해 파티 끝에 추가";
+  zone.innerHTML = `
+    <div class="drop-copy">
+      여기로 드롭해<br />
+      파티 끝에 추가
+    </div>
+  `;
   zone.addEventListener("dragover", handleDragOver);
   zone.addEventListener("dragleave", handleDragLeave);
   zone.addEventListener("drop", (event) => {
@@ -779,7 +784,7 @@ function createEmptyDropZone(groupId, partyIndex) {
   zone.className = "drop-target drop-target-empty";
   zone.innerHTML = `
     <div class="drop-copy">
-      검색 결과 또는 다른 파티의 캐릭터를<br />
+      캐릭터 카드를<br />
       여기로 드래그하세요.
     </div>
   `;
@@ -1148,10 +1153,10 @@ function removeCharacterFromParty(characterId) {
     return;
   }
 
-  state.results = mergeCharacters(state.results, [character], false);
+  state.stash = mergeStashCharacters(state.stash, [character]);
   persistState();
   render();
-  showToast(`${character.name}을 검색 결과로 되돌렸습니다.`);
+  showToast(`${character.name}을 보관함으로 이동했습니다.`);
 }
 
 function mergeCharacters(existingCharacters, incomingCharacters, replace) {
