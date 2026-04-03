@@ -6,7 +6,7 @@
     <title>AION2 파티 빌더</title>
     <meta
       name="description"
-      content="AION2 공식 검색/랭킹 API로 캐릭터를 검색하고 1파티/2파티 그룹을 드래그 앤 드롭으로 편성하는 웹 페이지"
+      content="AION2 공식 검색/캐릭터 정보 API로 캐릭터를 검색하고 전투력과 아이템 레벨을 기준으로 파티를 편성하는 웹 페이지"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -22,8 +22,8 @@
         <p class="eyebrow">AION2 Official Search + Netlify</p>
         <h1>AION2 파티 편성 보드</h1>
         <p class="hero-copy">
-          AION2 캐릭터를 검색한 뒤 드래그해서 1파티와 2파티에 배치하세요. 한 파티는 최대 4명, 한
-          그룹은 최대 8명까지 구성됩니다.
+          AION2 캐릭터를 검색한 뒤 전투력과 아이템 레벨을 확인하고 1파티와 2파티에 배치하세요. 한
+          파티는 최대 4명, 한 그룹은 최대 8명까지 구성됩니다.
         </p>
         <div class="hero-meta">
           <span>API Key는 Netlify 환경 변수에만 보관할 수 있습니다.</span>
@@ -31,23 +31,6 @@
           <span>검색 결과를 다시 드래그하면 다른 그룹으로 즉시 이동됩니다.</span>
         </div>
       </header>
-
-      <section class="panel board-panel">
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Group Board</p>
-            <h2>그룹 편성</h2>
-          </div>
-          <div class="panel-actions">
-            <div class="summary-pill" id="assignmentSummary">0 / 8 배치</div>
-            <button class="btn btn-primary" id="addGroupBtn" type="button">그룹 추가</button>
-          </div>
-        </div>
-        <p class="panel-note">
-          파티 카드끼리도 드래그해서 순서를 바꾸거나 다른 그룹으로 옮길 수 있습니다.
-        </p>
-        <div id="groupsContainer" class="groups-container"></div>
-      </section>
 
       <section class="panel search-panel">
         <div class="panel-head">
@@ -104,6 +87,23 @@
         </div>
 
         <div id="resultsList" class="results-list"></div>
+      </section>
+
+      <section class="panel board-panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Group Board</p>
+            <h2>그룹 편성</h2>
+          </div>
+          <div class="panel-actions">
+            <div class="summary-pill" id="assignmentSummary">0 / 8 배치</div>
+            <button class="btn btn-primary" id="addGroupBtn" type="button">그룹 추가</button>
+          </div>
+        </div>
+        <p class="panel-note">
+          파티 카드끼리도 드래그해서 순서를 바꾸거나 다른 그룹으로 옮길 수 있습니다.
+        </p>
+        <div id="groupsContainer" class="groups-container"></div>
       </section>
     </div>
 

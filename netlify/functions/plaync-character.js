@@ -4,20 +4,9 @@ const AION2_BASE_URL = process.env.PLAYNC_AION2_BASE_URL || "https://aion2.playn
 const AION2_SEARCH_PATH = "/ko-kr/api/search/aion2/search/v2/character";
 const AION2_SERVERS_PATH = "/api/gameinfo/servers";
 const AION2_PCDATA_PATH = "/api/gameinfo/pcdata";
-const AION2_RANKING_PATH = "/api/ranking/list";
+const AION2_CHARACTER_INFO_PATH = "/api/character/info";
 const SUPPORTED_PRODUCTS = new Set(["aion2"]);
-const DISPLAY_METRIC_LABEL = "랭킹 점수";
 const CACHE_TTL_MS = 1000 * 60 * 60;
-const MAX_ENRICHED_CHARACTERS = 12;
-const RANKING_CONTENTS = [
-  { id: 1, key: "abyss" },
-  { id: 5, key: "arenaOfSolitude" },
-  { id: 6, key: "arenaOfCooperation" },
-  { id: 3, key: "nightmare" },
-  { id: 4, key: "transcendence" },
-  { id: 21, key: "ascensionTrial" },
-  { id: 20, key: "raid" }
-];
 
 const cache = {
   pcDataMap: {
@@ -107,22 +96,20 @@ async function searchAion2Characters({ keyword, server }) {
     resolvedServer?.serverId || ""
   );
 
-  const rankingCache = new Map();
-  const headCharacters = sortedCharacters.slice(0, MAX_ENRICHED_CHARACTERS);
-  const tailCharacters = sortedCharacters.slice(MAX_ENRICHED_CHARACTERS);
-  const enrichedHead = await Promise.all(
-    headCharacters.map((character) => enrichCharacterWithRanking(character, rankingCache))
+  const characterInfoCache = new Map();
+  const characters = await Promise.all(
+    sortedCharacters.map((character) => enrichCharacterWithInfo(character, characterInfoCache))
   );
-  const characters = enrichedHead.concat(tailCharacters);
 
   return {
     characters: characters.map(stripInternalFields),
     meta: {
       count: characters.length,
-      displayMetric: DISPLAY_METRIC_LABEL,
-      enrichedCount: enrichedHead.filter((character) => character.combatPower !== null).length,
+      enrichedCount: characters.filter(
+        (character) => character.combatPower !== null || character.itemLevel !== null
+      ).length,
       product: "aion2",
-      rankingPath: AION2_RANKING_PATH,
+      infoPath: AION2_CHARACTER_INFO_PATH,
       searchPath: AION2_SEARCH_PATH,
       server: resolvedServer
         ? {
@@ -134,69 +121,27 @@ async function searchAion2Characters({ keyword, server }) {
   };
 }
 
-async function enrichCharacterWithRanking(character, rankingCache) {
-  if (!character.name || !character.serverId) {
+async function enrichCharacterWithInfo(character, characterInfoCache) {
+  if (!character.characterId || !character.serverId) {
     return character;
   }
 
-  for (const content of RANKING_CONTENTS) {
-    const rankingList = await getRankingList({
-      rankingCache,
-      rankingContentsType: content.id,
-      searchCharacterName: character.name,
-      serverId: character.serverId
-    });
+  const characterInfo = await getCharacterInfo({
+    characterId: character.characterId,
+    characterInfoCache,
+    serverId: character.serverId
+  });
 
-    const rankingMatch = rankingList.find((item) => isSameCharacter(item, character));
-    if (!rankingMatch) {
-      continue;
-    }
-
-    return {
-      ...character,
-      className: toStringValue(rankingMatch.className) || character.className,
-      combatPower: toNumberValue(rankingMatch.point),
-      powerLabel: DISPLAY_METRIC_LABEL,
-      rankingSource: content.key
-    };
+  if (!characterInfo) {
+    return character;
   }
 
-  return character;
-}
-
-async function getRankingList({
-  rankingCache,
-  rankingContentsType,
-  searchCharacterName,
-  serverId
-}) {
-  const key = [rankingContentsType, serverId, searchCharacterName].join(":");
-
-  if (!rankingCache.has(key)) {
-    rankingCache.set(
-      key,
-      requestAion2Json({
-        path: AION2_RANKING_PATH,
-        query: {
-          lang: "ko",
-          rankingContentsType,
-          rankingType: 0,
-          searchCharacterName,
-          serverId
-        }
-      })
-        .then((payload) => (Array.isArray(payload.rankingList) ? payload.rankingList : []))
-        .catch((error) => {
-          if (error.statusCode === 404) {
-            return [];
-          }
-
-          throw error;
-        })
-    );
-  }
-
-  return rankingCache.get(key);
+  return {
+    ...character,
+    className: characterInfo.className || character.className,
+    combatPower: characterInfo.combatPower,
+    itemLevel: characterInfo.itemLevel
+  };
 }
 
 function normalizeAion2Character(source, pcDataMap) {
@@ -221,10 +166,9 @@ function normalizeAion2Character(source, pcDataMap) {
     className: classInfo?.className || "미확인",
     combatPower: null,
     id: keyParts.filter(Boolean).join(":"),
+    itemLevel: null,
     name,
-    powerLabel: DISPLAY_METRIC_LABEL,
     product: "aion2",
-    rankingSource: "",
     serverId,
     serverName,
     worldName: ""
@@ -236,8 +180,8 @@ function stripInternalFields(character) {
     className: character.className,
     combatPower: character.combatPower,
     id: character.id,
+    itemLevel: character.itemLevel,
     name: character.name,
-    powerLabel: character.powerLabel || DISPLAY_METRIC_LABEL,
     product: character.product,
     serverId: character.serverId,
     serverName: character.serverName,
@@ -289,15 +233,6 @@ function dedupeCharacters(characters) {
   });
 
   return Array.from(map.values());
-}
-
-function isSameCharacter(rankingItem, character) {
-  const rankingCharacterId = safeDecodeURIComponent(toStringValue(rankingItem.characterId));
-  if (rankingCharacterId && character.characterId) {
-    return rankingCharacterId === character.characterId;
-  }
-
-  return normalizeToken(toStringValue(rankingItem.characterName)) === normalizeToken(character.name);
 }
 
 async function getCachedServers() {
@@ -353,6 +288,44 @@ async function getCachedValue(target, loader) {
   target.value = value;
   target.expiresAt = Date.now() + CACHE_TTL_MS;
   return value;
+}
+
+async function getCharacterInfo({ characterId, characterInfoCache, serverId }) {
+  const key = [serverId, characterId].join(":");
+
+  if (!characterInfoCache.has(key)) {
+    characterInfoCache.set(
+      key,
+      requestAion2Json({
+        path: AION2_CHARACTER_INFO_PATH,
+        query: {
+          lang: "ko",
+          characterId,
+          serverId
+        }
+      })
+        .then((payload) => {
+          const profile = payload?.profile && typeof payload.profile === "object" ? payload.profile : {};
+          const statList = Array.isArray(payload?.stat?.statList) ? payload.stat.statList : [];
+          const itemLevelStat = statList.find((item) => toStringValue(item?.type) === "ItemLevel");
+
+          return {
+            className: toStringValue(profile.className),
+            combatPower: toNumberValue(profile.combatPower),
+            itemLevel: toNumberValue(profile.itemLevel ?? itemLevelStat?.value)
+          };
+        })
+        .catch((error) => {
+          if (error.statusCode === 404) {
+            return null;
+          }
+
+          throw error;
+        })
+    );
+  }
+
+  return characterInfoCache.get(key);
 }
 
 function resolveServer(input, servers) {

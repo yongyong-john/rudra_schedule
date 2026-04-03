@@ -127,9 +127,7 @@ function normalizeCharacter(character) {
       ? character.className.trim()
       : "미확인",
     combatPower: normalizePower(character.combatPower),
-    powerLabel: typeof character.powerLabel === "string" && character.powerLabel.trim()
-      ? character.powerLabel.trim()
-      : "전투력",
+    itemLevel: normalizePower(character.itemLevel),
     serverId: typeof character.serverId === "string" ? character.serverId.trim() : "",
     serverName: typeof character.serverName === "string" ? character.serverName.trim() : "",
     worldName: typeof character.worldName === "string" ? character.worldName.trim() : ""
@@ -357,14 +355,13 @@ function renderResults() {
 
 function renderSearchStatus() {
   if (state.ui.searchLoading) {
-    elements.searchStatus.textContent = "AION2 공식 검색/랭킹 API에서 캐릭터를 조회하는 중입니다.";
+    elements.searchStatus.textContent = "AION2 공식 검색/캐릭터 정보 API에서 캐릭터를 조회하는 중입니다.";
     return;
   }
 
   if (state.ui.searchMeta?.searchPath) {
-    const metricLabel = state.ui.searchMeta.displayMetric || "전투력";
     elements.searchStatus.textContent =
-      `마지막 조회: AION2 공식 검색 API (${state.ui.searchMeta.searchPath}) · 표시 지표: ${metricLabel}`;
+      `마지막 조회: 검색 API ${state.ui.searchMeta.searchPath} · 상세 API ${state.ui.searchMeta.infoPath || "없음"}`;
     return;
   }
 
@@ -502,17 +499,27 @@ function createCharacterCard(character, options) {
   className.className = "character-class";
   className.textContent = character.className || "미확인";
 
-  const power = document.createElement("div");
-  power.className = "power-block";
-  power.innerHTML = `
-    <span class="power-label">${character.powerLabel || "전투력"}</span>
-    <strong class="power-value">${formatPower(character.combatPower)}</strong>
-  `;
+  const metrics = document.createElement("div");
+  metrics.className = "metric-grid";
+  metrics.append(
+    createMetricBlock("전투력", formatPower(character.combatPower)),
+    createMetricBlock("아이템 레벨", formatPower(character.itemLevel))
+  );
 
-  meta.append(className, power);
+  meta.append(className, metrics);
 
   card.append(top, meta);
   return card;
+}
+
+function createMetricBlock(label, value) {
+  const block = document.createElement("div");
+  block.className = "metric-block";
+  block.innerHTML = `
+    <span class="metric-label">${label}</span>
+    <strong class="metric-value">${value}</strong>
+  `;
+  return block;
 }
 
 function moveCharacterToParty(payload, targetGroupId, targetPartyIndex, insertIndex) {
