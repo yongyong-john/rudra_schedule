@@ -19,12 +19,30 @@
   <body>
     <div class="page-shell">
       <header class="hero">
-        <p class="eyebrow">AION2 Official Search + Netlify</p>
-        <h1>AION2 파티 편성 보드</h1>
-        <p class="hero-copy">
-          AION2 캐릭터를 검색한 뒤 전투력과 아이템 레벨을 확인하고 1파티와 2파티에 배치하세요. 한
-          파티는 최대 4명, 한 그룹은 최대 8명까지 구성됩니다.
-        </p>
+        <div class="hero-head">
+          <div class="hero-title-wrap">
+            <p class="eyebrow">AION2 Official Search + Netlify</p>
+            <h1>AION2 파티 편성 보드</h1>
+            <p class="hero-copy">
+              AION2 캐릭터를 검색한 뒤 전투력과 아이템 레벨을 확인하고 1파티와 2파티에 배치하세요.
+              한 파티는 최대 4명, 한 그룹은 최대 8명까지 구성됩니다.
+            </p>
+          </div>
+
+          <aside class="session-panel" id="sessionPanel" hidden>
+            <div class="session-badge" id="boardModeBadge">로컬 저장</div>
+            <div class="session-code" id="boardCodeBlock" hidden>
+              <span>보드 코드</span>
+              <strong id="boardCodeValue">--------</strong>
+            </div>
+            <div class="session-actions" id="sessionActions">
+              <button class="btn btn-ghost" id="reloadServerBtn" type="button">서버 다시 불러오기</button>
+              <button class="btn btn-primary" id="copyShareLinkBtn" type="button">공유 링크 복사</button>
+            </div>
+            <p class="session-copy" id="sessionStatusText"></p>
+          </aside>
+        </div>
+
         <div class="hero-meta">
           <span>현재 공식 공개 캐릭터 검색 연동은 AION2 기준으로 구성되어 있습니다.</span>
           <span>검색 결과를 다시 드래그하면 다른 그룹으로 즉시 이동됩니다.</span>
@@ -129,6 +147,37 @@
           </p>
           <div id="stashContainer" class="stash-container"></div>
         </section>
+      </section>
+    </div>
+
+    <div class="launch-overlay" id="launchOverlay" hidden>
+      <section class="launch-modal" aria-labelledby="launchTitle">
+        <p class="panel-kicker">Board Mode</p>
+        <h2 id="launchTitle">저장 방식을 선택하세요</h2>
+        <p class="launch-copy" id="launchCopy">
+          기본 URL에서는 새 로컬 작업을 시작하거나 서버 보드를 새로 만들 수 있습니다. 공유 링크로
+          들어오면 서버에 저장된 보드를 바로 불러옵니다.
+        </p>
+
+        <div class="launch-actions">
+          <button class="btn btn-primary" id="chooseLocalBtn" type="button">로컬 저장</button>
+          <button class="btn btn-primary" id="chooseServerCreateBtn" type="button">서버 저장</button>
+        </div>
+
+        <div class="launch-load">
+          <label class="field" for="serverLoadInput">
+            <span>서버 불러오기</span>
+            <input
+              id="serverLoadInput"
+              type="text"
+              inputmode="latin"
+              maxlength="8"
+              placeholder="8자리 보드 코드를 입력하세요"
+              autocomplete="off"
+            />
+          </label>
+          <button class="btn btn-ghost" id="loadServerBoardBtn" type="button">서버 불러오기</button>
+        </div>
       </section>
     </div>
 

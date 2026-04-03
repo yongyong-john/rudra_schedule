@@ -1,4 +1,7 @@
-const STORAGE_KEY = "plaync-party-builder:v1";
+const LOCAL_STORAGE_KEY = "plaync-party-builder:local:v2";
+const BOARD_CODE_PARAM = "board";
+const SERVER_POLL_INTERVAL_MS = 10000;
+const SERVER_SAVE_DEBOUNCE_MS = 500;
 
 const PRODUCT_OPTIONS = [
   { value: "aion2", label: "AION2" }
@@ -7,10 +10,20 @@ const PRODUCT_OPTIONS = [
 const elements = {
   addGroupBtn: document.getElementById("addGroupBtn"),
   assignmentSummary: document.getElementById("assignmentSummary"),
+  boardCodeBlock: document.getElementById("boardCodeBlock"),
+  boardCodeValue: document.getElementById("boardCodeValue"),
+  boardModeBadge: document.getElementById("boardModeBadge"),
   clearResultsBtn: document.getElementById("clearResultsBtn"),
+  chooseLocalBtn: document.getElementById("chooseLocalBtn"),
+  chooseServerCreateBtn: document.getElementById("chooseServerCreateBtn"),
+  copyShareLinkBtn: document.getElementById("copyShareLinkBtn"),
   groupsContainer: document.getElementById("groupsContainer"),
   keywordInput: document.getElementById("keywordInput"),
+  launchCopy: document.getElementById("launchCopy"),
+  launchOverlay: document.getElementById("launchOverlay"),
+  loadServerBoardBtn: document.getElementById("loadServerBoardBtn"),
   productSelect: document.getElementById("productSelect"),
+  reloadServerBtn: document.getElementById("reloadServerBtn"),
   resultsCount: document.getElementById("resultsCount"),
   resultsList: document.getElementById("resultsList"),
   resultsReleaseZone: document.getElementById("resultsReleaseZone"),
@@ -19,21 +32,25 @@ const elements = {
   searchHint: document.getElementById("searchHint"),
   searchStatus: document.getElementById("searchStatus"),
   serverInput: document.getElementById("serverInput"),
+  serverLoadInput: document.getElementById("serverLoadInput"),
+  sessionActions: document.getElementById("sessionActions"),
+  sessionPanel: document.getElementById("sessionPanel"),
+  sessionStatusText: document.getElementById("sessionStatusText"),
   stashContainer: document.getElementById("stashContainer"),
   stashCount: document.getElementById("stashCount"),
   sortSelect: document.getElementById("sortSelect"),
   toast: document.getElementById("toast")
 };
 
-const state = hydrateState();
+let state = createDefaultState();
+const session = createSessionState();
 let toastTimer = null;
 
-syncForm();
 bindEvents();
-render();
+initializeApp();
 
-function hydrateState() {
-  const fallback = {
+function createDefaultState() {
+  return {
     nextGroupId: 2,
     groups: [createGroup(1)],
     results: [],
@@ -49,39 +66,83 @@ function hydrateState() {
       searchLoading: false
     }
   };
+}
+
+function createSessionState() {
+  return {
+    boardCode: "",
+    isApplyingRemote: false,
+    isSaving: false,
+    lastServerUpdatedAt: "",
+    launchVisible: false,
+    mode: "booting",
+    saveTimer: null,
+    statusMessage: "",
+    syncTimer: null
+  };
+}
+
+async function initializeApp() {
+  const sharedBoardCode = readBoardCodeFromLocation();
+
+  if (sharedBoardCode) {
+    try {
+      await activateServerBoard(sharedBoardCode, { fromSharedLink: true });
+      return;
+    } catch (error) {
+      clearBoardCodeInLocation();
+      state = hydrateLocalState();
+      showLaunchOverlay("공유 링크 보드를 불러오지 못했습니다. 새 서버 보드를 만들거나 다른 코드를 입력해 주세요.");
+      render();
+      showToast(error.message || "공유 링크 보드를 불러오지 못했습니다.", "error");
+      return;
+    }
+  }
+
+  state = hydrateLocalState();
+  showLaunchOverlay();
+  render();
+}
+
+function hydrateLocalState() {
+  const fallback = createDefaultState();
 
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const stored = window.localStorage.getItem(LOCAL_STORAGE_KEY);
     if (!stored) {
       return fallback;
     }
 
-    const parsed = JSON.parse(stored);
-    const groups = Array.isArray(parsed.groups) && parsed.groups.length
-      ? parsed.groups.map(normalizeGroup).filter(Boolean)
-      : [createGroup(1)];
-
-    return {
-      nextGroupId: Number.isInteger(parsed.nextGroupId) ? parsed.nextGroupId : groups.length + 1,
-      groups,
-      results: Array.isArray(parsed.results) ? parsed.results.map(normalizeCharacter).filter(Boolean) : [],
-      stash: Array.isArray(parsed.stash) ? parsed.stash.map(normalizeCharacter).filter(Boolean) : [],
-      settings: {
-        keyword: typeof parsed.settings?.keyword === "string" ? parsed.settings.keyword : "",
-        product: PRODUCT_OPTIONS.some((option) => option.value === parsed.settings?.product)
-          ? parsed.settings.product
-          : "aion2",
-        server: typeof parsed.settings?.server === "string" ? parsed.settings.server : "",
-        sortBy: parsed.settings?.sortBy === "itemLevel" ? "itemLevel" : "combatPower"
-      },
-      ui: {
-        searchMeta: parsed.ui?.searchMeta ?? null,
-        searchLoading: false
-      }
-    };
+    return normalizeStoredState(JSON.parse(stored), fallback);
   } catch (error) {
     return fallback;
   }
+}
+
+function normalizeStoredState(parsed, fallback) {
+  const safeFallback = fallback || createDefaultState();
+  const groups = Array.isArray(parsed?.groups) && parsed.groups.length
+    ? parsed.groups.map(normalizeGroup).filter(Boolean)
+    : safeFallback.groups;
+
+  return {
+    nextGroupId: Number.isInteger(parsed?.nextGroupId) ? parsed.nextGroupId : groups.length + 1,
+    groups,
+    results: Array.isArray(parsed?.results) ? parsed.results.map(normalizeCharacter).filter(Boolean) : [],
+    stash: Array.isArray(parsed?.stash) ? parsed.stash.map(normalizeCharacter).filter(Boolean) : [],
+    settings: {
+      keyword: typeof parsed?.settings?.keyword === "string" ? parsed.settings.keyword : "",
+      product: PRODUCT_OPTIONS.some((option) => option.value === parsed?.settings?.product)
+        ? parsed.settings.product
+        : "aion2",
+      server: typeof parsed?.settings?.server === "string" ? parsed.settings.server : "",
+      sortBy: parsed?.settings?.sortBy === "itemLevel" ? "itemLevel" : "combatPower"
+    },
+    ui: {
+      searchMeta: parsed?.ui?.searchMeta ?? null,
+      searchLoading: false
+    }
+  };
 }
 
 function normalizeGroup(group) {
@@ -167,6 +228,18 @@ function syncForm() {
 }
 
 function bindEvents() {
+  elements.chooseLocalBtn.addEventListener("click", activateLocalMode);
+  elements.chooseServerCreateBtn.addEventListener("click", handleCreateServerBoard);
+  elements.loadServerBoardBtn.addEventListener("click", handleLoadServerBoard);
+  elements.serverLoadInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleLoadServerBoard();
+    }
+  });
+  elements.copyShareLinkBtn.addEventListener("click", handleCopyShareLink);
+  elements.reloadServerBtn.addEventListener("click", handleReloadServerBoard);
+
   elements.addGroupBtn.addEventListener("click", () => {
     state.groups.push(createGroup(state.nextGroupId));
     state.nextGroupId += 1;
@@ -189,6 +262,107 @@ function bindEvents() {
   elements.resultsReleaseZone.addEventListener("dragover", handleDragOver);
   elements.resultsReleaseZone.addEventListener("dragleave", handleDragLeave);
   elements.resultsReleaseZone.addEventListener("drop", handleDropToReleaseZone);
+}
+
+async function activateLocalMode() {
+  stopServerSync();
+  session.mode = "local";
+  session.boardCode = "";
+  session.lastServerUpdatedAt = "";
+  session.statusMessage = "이 브라우저에만 저장됩니다.";
+  state = hydrateLocalState();
+  clearBoardCodeInLocation();
+  hideLaunchOverlay();
+  render();
+  showToast("로컬 저장 모드로 시작했습니다.");
+}
+
+async function handleCreateServerBoard() {
+  try {
+    const response = await requestBoardApi("create", {
+      method: "POST",
+      body: {
+        state: exportBoardState(createDefaultState())
+      }
+    });
+
+    session.mode = "server";
+    session.boardCode = response.boardCode;
+    session.lastServerUpdatedAt = response.updatedAt || "";
+    session.statusMessage = "서버 보드가 생성되었습니다. 공유 링크로 같은 보드를 불러올 수 있습니다.";
+    state = normalizeStoredState(response.state, createDefaultState());
+    setBoardCodeInLocation(response.boardCode);
+    hideLaunchOverlay();
+    startServerSync();
+    render();
+    showToast(`서버 보드 ${response.boardCode}를 생성했습니다.`);
+  } catch (error) {
+    showToast(error.message || "서버 보드를 생성하지 못했습니다.", "error");
+  }
+}
+
+async function handleLoadServerBoard() {
+  const boardCode = normalizeBoardCodeInput(elements.serverLoadInput.value);
+  if (!boardCode) {
+    showToast("8자리 보드 코드를 입력해 주세요.", "warn");
+    elements.serverLoadInput.focus();
+    return;
+  }
+
+  try {
+    await activateServerBoard(boardCode, { fromSharedLink: false });
+    showToast(`서버 보드 ${boardCode}를 불러왔습니다.`);
+  } catch (error) {
+    showToast(error.message || "서버 보드를 불러오지 못했습니다.", "error");
+  }
+}
+
+async function activateServerBoard(boardCode, options = {}) {
+  const response = await requestBoardApi("load", {
+    method: "GET",
+    boardCode
+  });
+
+  stopServerSync();
+  session.mode = "server";
+  session.boardCode = response.boardCode;
+  session.lastServerUpdatedAt = response.updatedAt || "";
+  session.statusMessage = options.fromSharedLink
+    ? "공유 링크로 접속한 서버 보드입니다."
+    : "서버 보드를 불러왔습니다.";
+  state = normalizeStoredState(response.state, createDefaultState());
+  setBoardCodeInLocation(response.boardCode);
+  hideLaunchOverlay();
+  startServerSync();
+  render();
+}
+
+async function handleReloadServerBoard() {
+  if (session.mode !== "server" || !session.boardCode) {
+    return;
+  }
+
+  try {
+    await syncServerBoard({ silent: false });
+    showToast("서버 보드를 다시 불러왔습니다.");
+  } catch (error) {
+    showToast(error.message || "서버 보드를 다시 불러오지 못했습니다.", "error");
+  }
+}
+
+async function handleCopyShareLink() {
+  if (session.mode !== "server" || !session.boardCode) {
+    return;
+  }
+
+  const shareLink = getShareLink(session.boardCode);
+
+  try {
+    await navigator.clipboard.writeText(shareLink);
+    showToast("공유 링크를 복사했습니다.");
+  } catch (error) {
+    showToast(`공유 링크를 복사하지 못했습니다. ${shareLink}`, "warn");
+  }
 }
 
 function handleSortChange(event) {
@@ -263,12 +437,42 @@ async function handleSearchSubmit(event) {
 }
 
 function render() {
+  renderSessionPanel();
+  renderLaunchOverlay();
   renderSummary();
   renderGroups();
   renderStash();
   renderResults();
   renderSearchStatus();
   syncForm();
+}
+
+function renderSessionPanel() {
+  const isServerMode = session.mode === "server";
+  const isLocalMode = session.mode === "local";
+
+  elements.sessionPanel.hidden = !isServerMode && !isLocalMode;
+  elements.boardModeBadge.textContent = isServerMode ? "서버 저장" : "로컬 저장";
+  elements.boardCodeBlock.hidden = !isServerMode;
+  elements.boardCodeValue.textContent = session.boardCode || "--------";
+  elements.sessionActions.hidden = !isServerMode;
+
+  if (isServerMode) {
+    const syncLabel = session.isSaving ? "서버에 저장 중입니다." : "공유 링크로 같은 보드를 불러올 수 있습니다.";
+    elements.sessionStatusText.textContent = session.statusMessage || syncLabel;
+    return;
+  }
+
+  if (isLocalMode) {
+    elements.sessionStatusText.textContent = session.statusMessage || "이 브라우저에만 저장됩니다.";
+    return;
+  }
+
+  elements.sessionStatusText.textContent = "";
+}
+
+function renderLaunchOverlay() {
+  elements.launchOverlay.hidden = !session.launchVisible;
 }
 
 function renderSummary() {
@@ -278,7 +482,7 @@ function renderSummary() {
   elements.assignmentSummary.textContent = `${assignedCount} / ${capacity} 배치`;
   elements.resultsCount.textContent = `검색 결과 ${visibleResults.length}명`;
   elements.stashCount.textContent = `보관 ${state.stash.length}명`;
-  elements.searchButton.disabled = state.ui.searchLoading;
+  elements.searchButton.disabled = state.ui.searchLoading || session.mode === "booting";
   elements.searchButton.textContent = state.ui.searchLoading ? "검색 중..." : "검색";
 }
 
@@ -960,19 +1164,180 @@ function cloneCharacter(character) {
 }
 
 function persistState() {
-  window.localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      nextGroupId: state.nextGroupId,
-      groups: state.groups,
-      results: state.results,
-      stash: state.stash,
-      settings: state.settings,
-      ui: {
-        searchMeta: state.ui.searchMeta
+  if (session.isApplyingRemote || session.mode === "booting") {
+    return;
+  }
+
+  if (session.mode === "server") {
+    scheduleServerSave();
+    return;
+  }
+
+  window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(exportBoardState()));
+}
+
+function exportBoardState(sourceState = state) {
+  return {
+    nextGroupId: sourceState.nextGroupId,
+    groups: sourceState.groups,
+    results: sourceState.results,
+    stash: sourceState.stash,
+    settings: sourceState.settings,
+    ui: {
+      searchMeta: sourceState.ui.searchMeta
+    }
+  };
+}
+
+function scheduleServerSave() {
+  if (session.mode !== "server" || !session.boardCode) {
+    return;
+  }
+
+  clearTimeout(session.saveTimer);
+  session.saveTimer = window.setTimeout(() => {
+    saveServerBoard().catch((error) => {
+      showToast(error.message || "서버 보드를 저장하지 못했습니다.", "error");
+    });
+  }, SERVER_SAVE_DEBOUNCE_MS);
+}
+
+async function saveServerBoard() {
+  if (session.mode !== "server" || !session.boardCode) {
+    return;
+  }
+
+  session.isSaving = true;
+  session.statusMessage = "서버에 저장 중입니다.";
+  renderSessionPanel();
+
+  try {
+    const response = await requestBoardApi("save", {
+      method: "POST",
+      body: {
+        boardCode: session.boardCode,
+        state: exportBoardState()
       }
-    })
-  );
+    });
+
+    session.lastServerUpdatedAt = response.updatedAt || session.lastServerUpdatedAt;
+    session.statusMessage = `서버 저장 완료 · 코드 ${session.boardCode}`;
+  } finally {
+    session.isSaving = false;
+    renderSessionPanel();
+  }
+}
+
+function startServerSync() {
+  stopServerSync();
+
+  if (session.mode !== "server" || !session.boardCode) {
+    return;
+  }
+
+  session.syncTimer = window.setInterval(() => {
+    syncServerBoard({ silent: true }).catch(() => {});
+  }, SERVER_POLL_INTERVAL_MS);
+}
+
+function stopServerSync() {
+  clearTimeout(session.saveTimer);
+  clearInterval(session.syncTimer);
+  session.saveTimer = null;
+  session.syncTimer = null;
+  session.isSaving = false;
+}
+
+async function syncServerBoard({ silent }) {
+  if (session.mode !== "server" || !session.boardCode) {
+    return;
+  }
+
+  const response = await requestBoardApi("load", {
+    method: "GET",
+    boardCode: session.boardCode
+  });
+
+  if (!response.updatedAt || response.updatedAt === session.lastServerUpdatedAt) {
+    return;
+  }
+
+  session.isApplyingRemote = true;
+  state = normalizeStoredState(response.state, createDefaultState());
+  session.lastServerUpdatedAt = response.updatedAt;
+  session.statusMessage = silent
+    ? `서버에서 최신 편성을 반영했습니다.`
+    : `서버 편성을 다시 불러왔습니다.`;
+  session.isApplyingRemote = false;
+  render();
+}
+
+function showLaunchOverlay(message) {
+  session.launchVisible = true;
+  elements.launchCopy.textContent = message
+    || "기본 URL에서는 새 로컬 작업을 시작하거나 서버 보드를 새로 만들 수 있습니다. 공유 링크로 들어오면 서버에 저장된 보드를 바로 불러옵니다.";
+  elements.serverLoadInput.value = "";
+}
+
+function hideLaunchOverlay() {
+  session.launchVisible = false;
+}
+
+function readBoardCodeFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  const boardCode = params.get(BOARD_CODE_PARAM) || "";
+  return normalizeBoardCodeInput(boardCode);
+}
+
+function setBoardCodeInLocation(boardCode) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(BOARD_CODE_PARAM, boardCode);
+  window.history.replaceState({}, "", url.toString());
+}
+
+function clearBoardCodeInLocation() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(BOARD_CODE_PARAM);
+  window.history.replaceState({}, "", url.toString());
+}
+
+function normalizeBoardCodeInput(value) {
+  const boardCode = String(value || "").trim();
+  return /^[A-Za-z0-9]{8}$/.test(boardCode) ? boardCode : "";
+}
+
+function getShareLink(boardCode) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(BOARD_CODE_PARAM, boardCode);
+  return url.toString();
+}
+
+async function requestBoardApi(action, options) {
+  const params = new URLSearchParams({ action });
+
+  if (options.method === "GET" && options.boardCode) {
+    params.set("boardCode", options.boardCode);
+  }
+
+  const requestOptions = {
+    method: options.method,
+    headers: {
+      "Content-Type": "application/json"
+    }
+  };
+
+  if (options.method !== "GET") {
+    requestOptions.body = JSON.stringify(options.body || {});
+  }
+
+  const response = await fetch(`/.netlify/functions/party-board?${params.toString()}`, requestOptions);
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error || "서버 보드 요청에 실패했습니다.");
+  }
+
+  return payload;
 }
 
 function formatPower(value) {
